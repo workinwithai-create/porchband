@@ -22,7 +22,7 @@ const QUAL = {'':[0,4,7], m:[0,3,7], min:[0,3,7], '7':[0,4,7,10], m7:[0,3,7,10],
 const ROOT = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
 
 // ---------- state ----------
-const DEFAULT = {bpm:92, keyRoot:0, chords:'C G Am F', recipe:'folk', bars:8,
+const DEFAULT = {bpm:92, keyRoot:0, chords:'C G Am F', recipe:'folk', bassStyle:'feel', bars:8,
   mutes:{drums:false,bass:false,piano:false,organ:false}, gains:{drums:0.9,bass:0.9,piano:0.75,organ:0.28},
   midiIn:'', midiOut:'', midiInMode:'chords'};
 const state = Object.assign({}, DEFAULT, JSON.parse(localStorage.getItem(APP+'-settings')||'{}'));
@@ -45,9 +45,9 @@ const inRange = (n, lo, hi) => { while(n<lo) n+=12; while(n>hi) n-=12; return n;
 // ---------- arrangement: shared by live scheduler, WAV export and MIDI export (deterministic) ----------
 function stepEvents(step, st, pr){
   const out=[], bar=Math.floor(step/16), s=step%16, t=pc(st.keyRoot-pr[0].root);
-  const c=pr[bar%4], root=pc(c.root+t), R=st.recipe;
+  const c=pr[bar%4], nx=pr[(bar+1)%4], root=pc(c.root+t), R=st.recipe, BS=st.bassStyle||'feel';
   if(!st.mutes.drums){
-    const kicks = R==='ballad'?[0,8]:R==='folk'?[0,6,8]:[0,7,8,10];
+    const kicks = R==='ballad'?[0,8]:R==='folk'?[0,6,8]:R==='groove'?(BS==='walk'?[0,8,10]:[0,8]):[0,7,8,10];
     if(kicks.includes(s)) out.push({part:'drums',note:36,dur:4,vel:s===0?1:0.8});
     if(s===4||s===12) out.push({part:'drums',note:38,dur:4,vel:R==='ballad'?0.55:0.85});
     if(R==='ballad'){ if(s%4===0) out.push({part:'drums',note:51,dur:4,vel:0.5}); }
@@ -55,7 +55,12 @@ function stepEvents(step, st, pr){
   }
   if(!st.mutes.bass){
     const b=inRange(33+pc(root-33), 33, 44), f=b+7; // root A1..G#2, fifth up to D#3
-    if(R==='ballad'){ if(s===0) out.push({part:'bass',note:b,dur:8,vel:0.95}); if(s===8) out.push({part:'bass',note:f,dur:8,vel:0.8}); }
+    if(BS==='roots'){ if(s%2===0) out.push({part:'bass',note:b,dur:2,vel:s%4===0?1:0.8}); }
+    else if(BS==='octave'){ if(s%2===0) out.push({part:'bass',note:b+((s/2)%2?12:0),dur:2,vel:0.9}); } // up to G#3 (56)
+    else if(BS==='walk'){ if(s%4===0){ const q=s/4, nr=inRange(33+pc(nx.root+t-33),33,44);
+        const n = q===0?b : q===1?b+c.ivs[1] : q===2?b+c.ivs[2] : (nr>b?nr-1:nr+1); // root, 3rd, 5th, chromatic approach
+        out.push({part:'bass',note:n,dur:4,vel:q===0?1:0.85}); } }
+    else if(R==='ballad'){ if(s===0) out.push({part:'bass',note:b,dur:8,vel:0.95}); if(s===8) out.push({part:'bass',note:f,dur:8,vel:0.8}); }
     else if(R==='folk'){ if(s%4===0) out.push({part:'bass',note:(s/4)%2?f:b,dur:4,vel:s===0?1:0.85}); }
     else { if(s%2===0) out.push({part:'bass',note:b,dur:2,vel:s%4===0?0.95:0.75}); }
   }
@@ -63,7 +68,7 @@ function stepEvents(step, st, pr){
   if(!st.mutes.piano){
     const v=voicing(55,67), lh=inRange(43+pc(root-43),43,54);
     const hit=(dur,vel)=>{ out.push({part:'piano',note:lh,dur,vel}); for(const n of v) out.push({part:'piano',note:n,dur,vel:vel*0.85}); };
-    if(R==='ballad'){ if(s===0) hit(16,0.8); }
+    if(R==='ballad'||R==='groove'){ if(s===0) hit(16,R==='groove'?0.7:0.8); }
     else if(R==='folk'){ if(s%2===0) hit(2, s%4===0?0.75:0.55); }
     else { if(s===0) hit(2,0.8); if(s%4===2) hit(2,0.65); }
   }
@@ -145,7 +150,7 @@ function scheduleStep(st, time){
   const sd=60/state.bpm/4, evs=stepEvents(st,state,prog);
   for(const ev of evs){ voice(ctx,liveBufs,bus.chairs[ev.part],ev,time,sd,true); midiSend(ev,time,sd); }
   stepLog.push({step:st,time}); if(stepLog.length>256) stepLog.shift();
-  window.__schedLog.push({step:st,time,bpm:state.bpm,recipe:state.recipe,mutes:Object.assign({},state.mutes),notes:evs.map(e=>e.part+':'+e.note)});
+  window.__schedLog.push({step:st,time,bpm:state.bpm,recipe:state.recipe,bassStyle:state.bassStyle,mutes:Object.assign({},state.mutes),notes:evs.map(e=>e.part+':'+e.note)});
   if(window.__schedLog.length>2000) window.__schedLog.shift();
 }
 function stop(){
@@ -208,7 +213,7 @@ function midiFile(st,pr){
     tracks.push(trk(evs)); }
   return new Uint8Array([].concat([0x4D,0x54,0x68,0x64,0,0,0,6,0,1,0,tracks.length,PPQ>>8,PPQ&255],...tracks));
 }
-const fileBase=st=>`${APP}-${st.recipe}-${st.bpm}bpm-${keyLabel()}`;
+const fileBase=st=>`${APP}-${st.recipe}-${(st.bassStyle&&st.bassStyle!=='feel')?st.bassStyle:'feelbass'}-${st.bpm}bpm-${keyLabel()}`;
 function download(bytes,name,type){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([bytes],{type})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); }
 async function exportWavBytes(o){ const r=await renderLoop(o); return {bytes:wav24(r.ch,r.N),name:fileBase(r.st)+'.wav'}; }
 function exportMidBytes(o){ const st=mergeOpts(o); return {bytes:midiFile(st,prog),name:fileBase(st)+'.mid'}; }
@@ -241,10 +246,10 @@ function refreshMidi(){ if(!midiAccess) return;
   midiOut=midiAccess.outputs.get(ui.midiOut.value)||null; }
 
 // ---------- UI ----------
-const ui={}; ['tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','licState','licKey','licBtn'].forEach(id=>ui[id]=document.getElementById(id));
+const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','licState','licKey','licBtn'].forEach(id=>ui[id]=document.getElementById(id));
 function setStatus(s){ ui.status.textContent=s; }
 ui.key.innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
-ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode;
+ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bassStyle.value=state.bassStyle; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode;
 ui.parts.innerHTML=PARTS.map(p=>`<div class="part" id="part-${p.id}"><label><span><input type="checkbox" data-mute="${p.id}"> Mute</span>${p.label}</label><input type="range" min="0" max="1" step="0.01" data-gain="${p.id}" value="${state.gains[p.id]}"></div>`).join('');
 function renderGrid(){ ui.grid.innerHTML=[0,1,2,3].map(i=>`<div class="bar"><div class="ph"></div><small>Bar ${i+1}</small><br><b>${chordName(i)}</b></div>`).join('');
   PARTS.forEach(p=>{ document.querySelector(`[data-mute="${p.id}"]`).checked=state.mutes[p.id]; document.getElementById('part-'+p.id).classList.toggle('muted',state.mutes[p.id]); }); }
@@ -254,6 +259,7 @@ ui.bpm.addEventListener('change',()=>{ const v=Math.round(+ui.bpm.value); if(!(v
 ui.key.addEventListener('change',()=>{ state.keyRoot=+ui.key.value; save(); renderGrid(); });
 ui.chords.addEventListener('change',onChords);
 ui.recipe.addEventListener('change',()=>{ state.recipe=ui.recipe.value; save(); });
+ui.bassStyle.addEventListener('change',()=>{ state.bassStyle=ui.bassStyle.value; save(); });
 ui.bars.addEventListener('change',()=>{ state.bars=+ui.bars.value; save(); });
 ui.preset.addEventListener('change',()=>{ if(ui.preset.value){ ui.chords.value=ui.preset.value; state.keyRoot=parseProg(ui.preset.value)[0].root; ui.key.value=state.keyRoot; prog=parseProg(ui.preset.value); onChords(); } });
 ui.midiInMode.addEventListener('change',()=>{ state.midiInMode=ui.midiInMode.value; save(); });

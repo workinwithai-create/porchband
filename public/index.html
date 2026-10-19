@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="style.css"></head>
 <body>
 <div id="tap" class="tap"><button id="tapBtn">Tap to start audio</button><p>iOS: the silent switch mutes Web Audio. Flip it off to hear sound.</p></div>
-<header><h1>PorchBand</h1><p class="tag">Your voice-memo idea needs a band. Type 4 chords and get real sampled piano, upright bass, drums and organ to sing over. Then export WAV + MIDI to finish it in your DAW.</p></header>
+<header><h1>PorchBand <small style="font-size:14px;color:#ffd9b0">with ChordBass bass engine</small></h1><p class="tag">Your voice-memo idea needs a band. Type 4 chords and get real sampled piano, upright bass, drums and organ to sing over. Then export WAV + MIDI to finish it in your DAW.</p></header>
 <main>
 <p id="loadStatus" class="load">Loading samples…</p>
 <section class="row">
@@ -13,8 +13,9 @@
  <label class="grow">Chords (4, one per bar) <input id="chords" placeholder="C G Am F"><small id="chordErr"></small></label>
 </section>
 <section class="row">
- <label>Feel <select id="recipe"><option value="ballad">Ballad (held piano, ride)</option><option value="folk">Folk strum (8th piano)</option><option value="pop">Pop (offbeat piano)</option></select></label>
- <label>Preset <select id="preset"><option value="">(your chords)</option><option>C G Am F</option><option>G D Em C</option><option>Am F C G</option><option>D A Bm G</option></select></label>
+ <label>Feel <select id="recipe"><option value="ballad">Ballad (held piano, ride)</option><option value="folk">Folk strum (8th piano)</option><option value="pop">Pop (offbeat piano)</option><option value="groove">Groove (ChordBass beat, held piano)</option></select></label>
+ <label>Bass style <select id="bassStyle"><option value="feel">Follow feel</option><option value="roots">Roots (8ths)</option><option value="octave">Octave bounce</option><option value="walk">Walk (root-3-5-approach)</option></select></label>
+ <label>Preset <select id="preset"><option value="">(your chords)</option><option>C G Am F</option><option>G D Em C</option><option>Am F C G</option><option>D A Bm G</option><option>Dm7 G7 Cmaj7 Am7</option><option>Em C G D</option></select></label>
  <label>Export bars <select id="bars"><option>4</option><option selected>8</option><option>16</option></select></label>
 </section>
 <section class="parts" id="parts"></section>
