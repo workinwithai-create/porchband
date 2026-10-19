@@ -1,0 +1,2 @@
+{ "buildCommand": "", "outputDirectory": "public", "framework": null,
+  "headers": [{ "source": "/samples/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }] }

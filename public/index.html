@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PorchBand: a real-instrument backing band for your song idea</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="tap" class="tap"><button id="tapBtn">Tap to start audio</button><p>iOS: the silent switch mutes Web Audio. Flip it off to hear sound.</p></div>
+<header><h1>PorchBand</h1><p class="tag">Your voice-memo idea needs a band. Type 4 chords and get real sampled piano, upright bass, drums and organ to sing over. Then export WAV + MIDI to finish it in your DAW.</p></header>
+<main>
+<p id="loadStatus" class="load">Loading samples…</p>
+<section class="row">
+ <label>BPM <input id="bpm" type="number" min="60" max="180" step="1"></label>
+ <label>Key (chord 1 root) <select id="key"></select></label>
+ <label class="grow">Chords (4, one per bar) <input id="chords" placeholder="C G Am F"><small id="chordErr"></small></label>
+</section>
+<section class="row">
+ <label>Feel <select id="recipe"><option value="ballad">Ballad (held piano, ride)</option><option value="folk">Folk strum (8th piano)</option><option value="pop">Pop (offbeat piano)</option></select></label>
+ <label>Preset <select id="preset"><option value="">(your chords)</option><option>C G Am F</option><option>G D Em C</option><option>Am F C G</option><option>D A Bm G</option></select></label>
+ <label>Export bars <select id="bars"><option>4</option><option selected>8</option><option>16</option></select></label>
+</section>
+<section class="parts" id="parts"></section>
+<section class="row">
+ <button id="play" class="big" disabled>▶ Play</button>
+ <button id="exportWav" disabled>Export WAV</button><button id="exportMid">Export MIDI</button>
+ <span id="status" class="status"></span>
+</section>
+<section class="grid" id="grid"></section>
+<section class="row midi">
+ <label>MIDI in <select id="midiIn"><option value="">(none)</option></select></label>
+ <label>In mode <select id="midiInMode"><option value="chords">Play a chord = set next chord slot</option><option value="transport">Any note = play/stop</option></select></label>
+ <label>MIDI out <select id="midiOut"><option value="">(none)</option></select></label>
+ <small id="midiNote">Out: Drums ch10, Bass ch1, Piano ch2, Organ ch3.</small>
+</section>
+<section class="license">
+ <h3>License</h3>
+ <p id="licState"></p>
+ <input id="licKey" placeholder="Lemon Squeezy license key"> <button id="licBtn">Unlock</button>
+</section>
+<p class="note">Real recorded instruments, all CC0: Upright Piano and Pipe Organ (Ivy Audio / VSCO 2 CE), Upright Bass (pizzicato contrabass, VSCO 2 CE), Acoustic Drum Kit (Virtuosity Drums). See <a href="samples/CREDITS.md" style="color:#d9a">samples/CREDITS.md</a>. iOS: the silent switch mutes Web Audio.</p>
+</main>
+<footer>WorkinWithAI · MPJRecords</footer>
+<script src="app.js"></script>
+</body></html>
