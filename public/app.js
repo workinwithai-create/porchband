@@ -24,8 +24,9 @@ const ROOT = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
 // ---------- state ----------
 const DEFAULT = {bpm:92, keyRoot:0, chords:'C G Am F', recipe:'folk', bassStyle:'feel', bars:8,
   mutes:{drums:false,bass:false,piano:false,organ:false}, gains:{drums:0.9,bass:0.9,piano:0.75,organ:0.28},
-  midiIn:'', midiOut:'', midiInMode:'chords'};
+  midiIn:'', midiOut:'', midiInMode:'play', midiTransport:false, liveInst:'piano', liveOct:4, liveGain:0.9, liveRec:false, liveQuant:false};
 const state = Object.assign({}, DEFAULT, JSON.parse(localStorage.getItem(APP+'-settings')||'{}'));
+if(state.midiInMode==='transport'){ state.midiInMode='play'; state.midiTransport=true; } // old 'any note = play/stop' mode retired
 state.mutes = Object.assign({}, DEFAULT.mutes, state.mutes); state.gains = Object.assign({}, DEFAULT.gains, state.gains);
 function save(){ localStorage.setItem(APP+'-settings', JSON.stringify(state)); }
 
@@ -164,7 +165,7 @@ function draw(){
   for(const e of stepLog){ if(e.time<=now) cur=e; else break; }
   if(cur){ const bar=Math.floor(cur.step/16), frac=(cur.step%16+Math.min(1,(now-cur.time)/(60/state.bpm/4)))/16;
     document.querySelectorAll('.bar').forEach((b,i)=>{ b.classList.toggle('on',i===bar); if(i===bar) b.querySelector('.ph').style.left=(frac*100)+'%'; }); }
-  requestAnimationFrame(draw);
+  updateHint(); requestAnimationFrame(draw);
 }
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&playing){ stop(); setStatus('Stopped (tab hidden).'); } });
 
@@ -188,6 +189,8 @@ async function renderLoop(opts){
   const bufs=await decodeAll(oc); // decode the kept raw ArrayBuffers, no re-download
   const b=buildBus(oc, st.gains), sd=60/st.bpm/4;
   for(let s=0;s<st.bars*16;s++) for(const ev of stepEvents(s,st,pr)) voice(oc,bufs,b.chairs[ev.part],ev,s*sd,sd,false);
+  if(liveTake.notes.length){ const lg=oc.createGain(); lg.gain.value=st.liveGain; lg.connect(b.comp);
+    for(const ev of takeEvents(st)) voice(oc,bufs,lg,ev,ev.pos*sd,sd,false); }
   const buf=await oc.startRendering();
   const ch=[0,1].map(i=>{ const d=buf.getChannelData(i), o=new Float32Array(N); o.set(d.subarray(D,D+N)); for(let j=0;j<TAIL;j++) o[j]+=d[D+N+j]; return o; });
   let peak=0; for(const d of ch) for(let i=0;i<N;i++){ const a=Math.abs(d[i]); if(a>peak) peak=a; }
@@ -210,6 +213,9 @@ function midiFile(st,pr){
   for(const p of PARTS){ const evs=[{t:0,o:0,b:name(p.label)}];
     for(let s=0;s<st.bars*16;s++) for(const ev of stepEvents(s,st,pr)) if(ev.part===p.id){ const v=Math.max(1,Math.round(ev.vel*110));
       evs.push({t:s*T,o:2,b:[0x90|p.ch,ev.note,v]}); evs.push({t:(s+ev.dur)*T,o:1,b:[0x80|p.ch,ev.note,0]}); }
+    tracks.push(trk(evs)); }
+  if(liveTake.notes.length){ const evs=[{t:0,o:0,b:name('Live ('+INSTR[liveTake.inst].name+')')}];
+    for(const ev of takeEvents(st)){ const v=Math.max(1,Math.round(ev.vel*127)); evs.push({t:Math.round(ev.pos*T),o:2,b:[0x93,ev.note,v]}); evs.push({t:Math.round((ev.pos+ev.dur)*T),o:1,b:[0x83,ev.note,0]}); }
     tracks.push(trk(evs)); }
   return new Uint8Array([].concat([0x4D,0x54,0x68,0x64,0,0,0,6,0,1,0,tracks.length,PPQ>>8,PPQ&255],...tracks));
 }
@@ -245,11 +251,94 @@ function midiSend(ev,time,sd){ if(!midiOut||!ctx) return; const p=PARTS.find(x=>
 function chordFromNotes(notes){ const pcs=[...new Set([...notes].map(n=>n%12))], bass=Math.min(...notes)%12;
   for(const r of [bass,...pcs]) for(const [q,ivs] of Object.entries({'':[0,4,7],m:[0,3,7],'7':[0,4,7,10],m7:[0,3,7,10],maj7:[0,4,7,11],dim:[0,3,6]})){
     const set=ivs.map(i=>(r+i)%12); if(set.length===pcs.length&&set.every(x=>pcs.includes(x))) return NAMES[r]+q; } return null; }
-function onMidiMsg(e){ const [s,n,v]=e.data, cmd=s&0xF0;
-  if(cmd===0x90&&v>0){ if(state.midiInMode==='transport'){ togglePlay(); return; } held.add(n); chordNotes=new Set(held); }
-  else if(cmd===0x80||(cmd===0x90&&v===0)){ held.delete(n);
-    if(state.midiInMode==='chords'&&held.size===0&&chordNotes&&chordNotes.size>=3){ const c=chordFromNotes(chordNotes); chordNotes=null;
+function onMidiMsg(e){ const d=e.data, s=d[0], cmd=s&0xF0, n=d[1], v=d[2];
+  // Transport: ONLY MIDI realtime Start/Continue/Stop, and only if the user opted in. Notes never touch transport.
+  if(s===0xFA||s===0xFB){ if(state.midiTransport&&!playing) togglePlay(); return; }
+  if(s===0xFC){ if(state.midiTransport&&playing) stop(); return; }
+  if(s>=0xF0) return; // clock, active sensing etc.
+  if(cmd===0xB0&&n===64){ setSustain(v>=64); return; }
+  if(cmd===0xB0&&(n===123||n===120)){ liveAllOff(); return; }
+  const on=cmd===0x90&&v>0, off=cmd===0x80||(cmd===0x90&&v===0);
+  if(state.midiInMode==='play'){ if(on) liveOn(n,v/127,'midi'); else if(off) liveOff(n,'midi'); return; }
+  if(on){ held.add(n); chordNotes=new Set(held); }
+  else if(off){ held.delete(n);
+    if(held.size===0&&chordNotes&&chordNotes.size>=3){ const c=chordFromNotes(chordNotes); chordNotes=null;
       if(c){ const t=ui.chords.value.trim().split(/\s+/); while(t.length<4) t.push('C'); t[slot]=c; slot=(slot+1)%4; ui.chords.value=t.join(' '); onChords(); } } } }
+
+// ---------- live play-along: MIDI keyboard / computer keys / on-screen keys -> the desk's real samples ----------
+// Immediate trigger at ctx.currentTime. Runs beside the lookahead scheduler and never touches its state.
+const LIVE_INST=['piano','bass','organ'];
+const liveRange=id=>{ const r=INSTR[id].roots; return [r[0]-MAX_SHIFT, r[r.length-1]+MAX_SHIFT]; };
+const liveVoices=new Map(); // key "src:note" -> voice
+let sustain=false, liveGainNode=null; const liveTake={inst:'piano',notes:[]}; const liveOpen=new Map();
+window.__liveLog=[];
+function liveDest(){ if(!liveGainNode){ liveGainNode=ctx.createGain(); liveGainNode.gain.value=state.liveGain; liveGainNode.connect(bus.comp); } return liveGainNode; }
+function foldNote(id,n){ const [lo,hi]=liveRange(id); return inRange(n,lo,hi); }
+function liveOn(note,vel,src){
+  if(!ctx||ctx.state!=='running'||!liveBufs){ setStatus('Tap to start audio first, then play.'); return; }
+  const id=state.liveInst, n=foldNote(id,note), key=src+':'+note;
+  if(liveVoices.has(key)) releaseVoice(liveVoices.get(key),ctx.currentTime);
+  const r=pickSample(id,n), buf=liveBufs[id][r], rate=Math.pow(2,(n-r)/12), t=ctx.currentTime;
+  const g=ctx.createGain(), vg=Math.max(0.05,Math.pow(vel,1.5)); g.connect(liveDest());
+  const s=ctx.createBufferSource(); s.buffer=buf; s.playbackRate.value=rate;
+  if(id==='organ'){ s.loop=true; s.loopStart=Math.min(1.0,buf.duration*0.3); s.loopEnd=buf.duration-0.05; } // held organ sustains
+  s.connect(g); g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vg,t+(id==='organ'?0.03:0.002));
+  s.start(t); if(id!=='organ') s.stop(t+buf.duration/rate);
+  const vo={s,g,id,vg,sustained:false,done:false}; s.onended=()=>{ vo.done=true; if(liveVoices.get(key)===vo) liveVoices.delete(key); };
+  liveVoices.set(key,vo); keyVis(note,true);
+  window.__liveLog.push({ev:'on',note,n,vel,src,perf:performance.now(),startAt:t,ctxNow:ctx.currentTime}); if(window.__liveLog.length>500) window.__liveLog.shift();
+  if(state.liveRec&&playing){ const p=transportPos(t); if(p!==null){ liveOpen.set(key,{note:n,vel,pos:p}); liveTake.inst=id; } } recUI();
+}
+function releaseVoice(vo,t){ if(vo.done) return; vo.done=true; const rel=REL[vo.id]||0.1; const g=vo.g.gain;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(0,t+rel); try{ vo.s.stop(t+rel+0.02); }catch(e){} }
+function liveOff(note,src){ const key=src+':'+note, vo=liveVoices.get(key); keyVis(note,false);
+  window.__liveLog.push({ev:'off',note,src,perf:performance.now(),ctxNow:ctx?ctx.currentTime:0,sustain});
+  closeRec(key);
+  if(!vo) return; if(sustain){ vo.sustained=true; return; } liveVoices.delete(key); releaseVoice(vo,ctx.currentTime); }
+function setSustain(down){ sustain=down; window.__liveLog.push({ev:'cc64',down,perf:performance.now()});
+  if(!down&&ctx) for(const [k,vo] of liveVoices) if(vo.sustained){ liveVoices.delete(k); releaseVoice(vo,ctx.currentTime); } }
+function liveAllOff(){ if(!ctx) return; for(const [k,vo] of liveVoices) releaseVoice(vo,ctx.currentTime); liveVoices.clear(); sustain=false; document.querySelectorAll('.mk.down').forEach(k=>k.classList.remove('down')); }
+// position (in 16th steps, fractional) of audio time t within the running loop, from the scheduler's own step log
+function transportPos(t){ let cur=null; for(const e of stepLog){ if(e.time<=t) cur=e; else break; } if(!cur) return null;
+  return cur.step+(t-cur.time)/(60/state.bpm/4); }
+function closeRec(key){ const o=liveOpen.get(key); if(!o||!ctx) return; liveOpen.delete(key); const p=transportPos(ctx.currentTime);
+  let dur=p===null?1:p-o.pos; if(dur<=0) dur+=state.bars*16; liveTake.notes.push({note:o.note,vel:o.vel,pos:o.pos,dur:Math.max(0.25,dur)}); recUI(); }
+function takeEvents(st){ const L=st.bars*16, out=[]; // aligned to the grid; quantize to 16ths only if chosen
+  for(const x of liveTake.notes){ let pos=x.pos, dur=x.dur; if(st.liveQuant){ pos=Math.round(pos); dur=Math.max(1,Math.round(dur)); }
+    pos=((pos%L)+L)%L; out.push({part:liveTake.inst,note:foldNote(liveTake.inst,x.note),vel:x.vel,pos,dur:Math.min(dur,L-pos)}); }
+  return out.sort((a,b)=>a.pos-b.pos); }
+function recUI(){ const el=document.getElementById('liveTakeInfo'); if(el) el.textContent=liveTake.notes.length?`Live take: ${liveTake.notes.length} notes (${INSTR[liveTake.inst].name}), added to WAV + MIDI exports`:'No live take (exports unchanged)'; }
+// computer keyboard: A W S E D F T G Y H U J K = C..C, Z/X octave
+const KEYMAP='awsedftgyhujk';
+function kbBase(){ return 12*(state.liveOct+1); }
+document.addEventListener('keydown',e=>{ if(e.repeat||e.metaKey||e.ctrlKey||e.altKey) return; const tg=e.target.tagName; if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA') return;
+  const k=e.key.toLowerCase(), i=KEYMAP.indexOf(k);
+  if(k==='z'||k==='x'){ state.liveOct=Math.max(1,Math.min(6,state.liveOct+(k==='z'?-1:1))); save(); renderKeys(); return; }
+  if(i>=0){ e.preventDefault(); liveOn(kbBase()+i,0.8,'kb'); } });
+document.addEventListener('keyup',e=>{ const i=KEYMAP.indexOf(e.key.toLowerCase()); if(i>=0) liveOff(kbBase()+i,'kb'); });
+window.addEventListener('blur',()=>{ for(const [k] of [...liveVoices]) if(k.startsWith('kb:')||k.startsWith('tap:')) liveOff(+k.split(':')[1],k.split(':')[0]); });
+// key/scale hint: chord tones of the chord under the playhead
+let hintBar=-1;
+function curBar(){ if(!playing||!ctx) return 0; const now=ctx.currentTime; let cur=null; for(const e of stepLog){ if(e.time<=now) cur=e; else break; } return cur?Math.floor(cur.step/16)%4:0; }
+function chordTones(i){ const c=prog[i], r=pc(c.root+transpose()); return c.ivs.map(iv=>pc(r+iv)); }
+function updateHint(force){ const b=curBar(); if(b===hintBar&&!force) return; hintBar=b; const tones=chordTones(b);
+  const scale=(prog[0].minor?[0,2,3,5,7,8,10]:[0,2,4,5,7,9,11]).map(x=>pc(x+state.keyRoot));
+  const el=document.getElementById('liveHint'); if(el) el.innerHTML=`Key <b>${NAMES[state.keyRoot]} ${prog[0].minor?'minor':'major'}</b> · now <b>${chordName(b)}</b>: chord tones <b>${tones.map(t=>NAMES[t]).join(' ')}</b>`;
+  document.querySelectorAll('.mk').forEach(k=>{ const p=pc(+k.dataset.n); k.classList.toggle('tone',tones.includes(p)); k.classList.toggle('root',p===tones[0]); k.classList.toggle('out',!scale.includes(p)); }); }
+function renderKeys(){ const box=document.getElementById('miniKeys'); if(!box) return; const base=kbBase();
+  box.innerHTML=[...Array(13)].map((_,i)=>{ const n=base+i, blk=[1,3,6,8,10].includes(i%12);
+    return `<button class="mk ${blk?'blk':'wht'}" data-n="${n}" aria-label="${NAMES[n%12]}${Math.floor(n/12)-1}"><span>${NAMES[n%12]}</span><i>${KEYMAP[i].toUpperCase()}</i></button>`; }).join('');
+  const ol=document.getElementById('liveOctLbl'); if(ol) ol.textContent='C'+state.liveOct; updateHint(true); }
+function keyVis(n,on){ const k=document.querySelector(`.mk[data-n="${n}"]`); if(k) k.classList.toggle('down',on); }
+(function(){ const box=document.getElementById('miniKeys'); if(!box) return; const down=new Map();
+  box.addEventListener('pointerdown',e=>{ const k=e.target.closest('.mk'); if(!k) return; e.preventDefault(); try{ if(k.hasPointerCapture&&k.hasPointerCapture(e.pointerId)) k.releasePointerCapture(e.pointerId); }catch(_){}
+    const n=+k.dataset.n; down.set(e.pointerId,n); liveOn(n,0.8,'tap'); });
+  const up=e=>{ if(!down.has(e.pointerId)) return; liveOff(down.get(e.pointerId),'tap'); down.delete(e.pointerId); };
+  box.addEventListener('pointerup',up); box.addEventListener('pointercancel',up); box.addEventListener('pointerleave',up);
+  box.addEventListener('pointerover',e=>{ if(!down.has(e.pointerId)||e.buttons===0) return; const k=e.target.closest('.mk'); if(!k) return; const n=+k.dataset.n;
+    if(n!==down.get(e.pointerId)){ liveOff(down.get(e.pointerId),'tap'); down.set(e.pointerId,n); liveOn(n,0.8,'tap'); } });
+  box.addEventListener('contextmenu',e=>e.preventDefault()); })();
+window.__live={liveOn,liveOff,setSustain,take:liveTake,voices:liveVoices,get sustain(){return sustain;}};
 function refreshMidi(){ if(!midiAccess) return;
   const fill=(sel,ports,cur)=>{ sel.innerHTML='<option value="">(none)</option>'+[...ports.values()].map(p=>`<option value="${p.id}">${p.name}</option>`).join(''); sel.value=[...ports.keys()].includes(cur)?cur:''; };
   fill(ui.midiIn,midiAccess.inputs,state.midiIn); fill(ui.midiOut,midiAccess.outputs,state.midiOut);
@@ -257,13 +346,13 @@ function refreshMidi(){ if(!midiAccess) return;
   midiOut=midiAccess.outputs.get(ui.midiOut.value)||null; }
 
 // ---------- UI ----------
-const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','licState','licKey','licBtn','licOff','buy'].forEach(id=>ui[id]=document.getElementById(id));
+const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','midiTransport','liveInst','liveOctDn','liveOctUp','liveGainIn','liveRec','liveQuant','liveClear','licState','licKey','licBtn','licOff','buy'].forEach(id=>ui[id]=document.getElementById(id));
 function setStatus(s){ ui.status.textContent=s; }
 ui.key.innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
-ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bassStyle.value=state.bassStyle; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode;
+ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bassStyle.value=state.bassStyle; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode; ui.midiTransport.checked=state.midiTransport; ui.liveInst.value=state.liveInst; ui.liveGainIn.value=state.liveGain; ui.liveRec.checked=state.liveRec; ui.liveQuant.checked=state.liveQuant;
 ui.parts.innerHTML=PARTS.map(p=>`<div class="part" id="part-${p.id}"><label><span><input type="checkbox" data-mute="${p.id}"> Mute</span>${p.label}</label><input type="range" min="0" max="1" step="0.01" data-gain="${p.id}" value="${state.gains[p.id]}"></div>`).join('');
 function renderGrid(){ ui.grid.innerHTML=[0,1,2,3].map(i=>`<div class="bar"><div class="ph"></div><small>Bar ${i+1}</small><br><b>${chordName(i)}</b></div>`).join('');
-  PARTS.forEach(p=>{ document.querySelector(`[data-mute="${p.id}"]`).checked=state.mutes[p.id]; document.getElementById('part-'+p.id).classList.toggle('muted',state.mutes[p.id]); }); }
+  updateHint(true); PARTS.forEach(p=>{ document.querySelector(`[data-mute="${p.id}"]`).checked=state.mutes[p.id]; document.getElementById('part-'+p.id).classList.toggle('muted',state.mutes[p.id]); }); }
 function onChords(){ const p=parseProg(ui.chords.value); if(!p){ ui.chordErr.textContent='Enter exactly 4 chords, e.g. C G Am F (m, 7, m7, maj7, dim, sus2, sus4)'; return; }
   ui.chordErr.textContent=''; const t=transpose(); prog=p; state.chords=ui.chords.value.trim(); state.keyRoot=pc(p[0].root+t); ui.key.value=state.keyRoot; save(); renderGrid(); }
 ui.bpm.addEventListener('change',()=>{ const v=Math.round(+ui.bpm.value); if(!(v>=60&&v<=180)){ ui.bpm.value=state.bpm; setStatus('BPM must be 60–180'); return; } state.bpm=v; save(); });
@@ -273,7 +362,15 @@ ui.recipe.addEventListener('change',()=>{ state.recipe=ui.recipe.value; save(); 
 ui.bassStyle.addEventListener('change',()=>{ state.bassStyle=ui.bassStyle.value; save(); });
 ui.bars.addEventListener('change',()=>{ state.bars=+ui.bars.value; save(); });
 ui.preset.addEventListener('change',()=>{ if(ui.preset.value){ ui.chords.value=ui.preset.value; state.keyRoot=parseProg(ui.preset.value)[0].root; ui.key.value=state.keyRoot; prog=parseProg(ui.preset.value); onChords(); } });
-ui.midiInMode.addEventListener('change',()=>{ state.midiInMode=ui.midiInMode.value; save(); });
+ui.midiInMode.addEventListener('change',()=>{ state.midiInMode=ui.midiInMode.value; held.clear(); chordNotes=null; liveAllOff(); save(); });
+ui.midiTransport.addEventListener('change',()=>{ state.midiTransport=ui.midiTransport.checked; save(); });
+ui.liveInst.addEventListener('change',()=>{ liveAllOff(); state.liveInst=ui.liveInst.value; save(); });
+ui.liveGainIn.addEventListener('input',()=>{ state.liveGain=+ui.liveGainIn.value; if(liveGainNode) liveGainNode.gain.setTargetAtTime(state.liveGain,ctx.currentTime,0.01); save(); });
+ui.liveOctDn.addEventListener('click',()=>{ state.liveOct=Math.max(1,state.liveOct-1); save(); renderKeys(); });
+ui.liveOctUp.addEventListener('click',()=>{ state.liveOct=Math.min(6,state.liveOct+1); save(); renderKeys(); });
+ui.liveRec.addEventListener('change',()=>{ state.liveRec=ui.liveRec.checked; save(); });
+ui.liveQuant.addEventListener('change',()=>{ state.liveQuant=ui.liveQuant.checked; save(); });
+ui.liveClear.addEventListener('click',()=>{ liveTake.notes.length=0; liveOpen.clear(); recUI(); });
 ui.midiIn.addEventListener('change',()=>{ state.midiIn=ui.midiIn.value; save(); refreshMidi(); });
 ui.midiOut.addEventListener('change',()=>{ state.midiOut=ui.midiOut.value; save(); refreshMidi(); });
 ui.parts.addEventListener('input',e=>{ const m=e.target.dataset.mute, g=e.target.dataset.gain;
@@ -297,4 +394,4 @@ else { ui.buy.removeAttribute('href'); ui.buy.setAttribute('aria-disabled','true
 if(lic.valid&&lic.key) validateKey(lic.key,lic.instance).then(v=>{ lic.valid=v; lic.checked=Date.now(); if(!v) delete lic.instance; saveLic(); licUI(); }).catch(()=>{});
 if(navigator.requestMIDIAccess) navigator.requestMIDIAccess().then(a=>{ midiAccess=a; a.onstatechange=refreshMidi; refreshMidi(); }).catch(()=>{ ui.midiNote.textContent='Web MIDI unavailable or blocked in this browser.'; });
 else ui.midiNote.textContent='Web MIDI not supported in this browser (try Chrome/Edge).';
-renderGrid(); licUI(); showLoad();
+renderKeys(); renderGrid(); licUI(); showLoad(); recUI();
