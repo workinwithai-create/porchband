@@ -13,3 +13,6 @@ button{cursor:pointer;background:#2a2f3c}button.big{background:#7c4dff;font-weig
 .tap{position:fixed;inset:0;background:#0f1115ee;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9}.tap button{font-size:22px;padding:16px 28px;background:#7c4dff}.tap.hide{display:none}
 .load{color:#ffd27b}.miss{color:#ff7b7b;font-weight:700}button:disabled{opacity:.4;cursor:not-allowed}
 header{background:linear-gradient(90deg,#6b3b12,#0f1115)}button.big{background:#d9822b}.bar.on{outline-color:#d9822b}.bar .ph{background:#d9822b}.tap button{background:#d9822b}
+.licrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.licrow input{flex:1;min-width:0}
+.buy{display:inline-block;padding:8px 12px;border-radius:8px;background:#d9822b;color:#fff;text-decoration:none;font-weight:700}.buy[aria-disabled=true]{background:#2a2f3c;color:#aab;cursor:default}
+@media (max-width:520px){main{padding:10px 12px}header{padding:14px 12px}h1{font-size:24px}.part{flex:1 1 140px;min-width:0}.row label{min-width:0}.row select,.row input{max-width:100%}.grid{gap:4px}.bar b{font-size:16px}.licrow input{flex-basis:100%}}

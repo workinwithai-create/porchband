@@ -220,12 +220,23 @@ function exportMidBytes(o){ const st=mergeOpts(o); return {bytes:midiFile(st,pro
 window.__porchband={state,exportWavBytes,exportMidBytes,stepEvents,start,stop,loadAll,get missing(){return [...missing];},get playing(){return playing;},get ctx(){return ctx;},fetchCount:()=>Object.keys(raw).length};
 
 // ---------- license gate (Lemon Squeezy License API) ----------
+// ONE place to configure checkout. Mark: paste the values from your Lemon Squeezy product (license keys enabled).
+const LEMON = { checkoutUrl: "", storeId: null, productId: null, price: "$12 once" };
+window.__lemon=LEMON; // test hook (config only, no secrets)
+const LS_API='https://api.lemonsqueezy.com/v1/licenses/';
 const lic=JSON.parse(localStorage.getItem(APP+'-license')||'{"valid":false}');
-async function validateKey(key){
-  const r=await fetch('https://api.lemonsqueezy.com/v1/licenses/validate',{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},body:'license_key='+encodeURIComponent(key)});
-  const j=await r.json(); return !!j.valid;
-}
-function licUI(){ ui.licState.textContent = lic.valid ? 'Licensed: 8 and 16-bar WAV export unlocked. Thank you!' : 'Free demo: play along with every feel, MIDI export, MIDI in/out, and 4-bar WAV export. A license key unlocks 8 and 16-bar WAV export.'; }
+const configured=()=>!!(LEMON.storeId&&LEMON.productId);
+async function lsCall(action,params){ const r=await fetch(LS_API+action,{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(params).toString()}); return r.json(); }
+const ours=j=>!!j&&!!j.meta&&+j.meta.store_id===+LEMON.storeId&&+j.meta.product_id===+LEMON.productId;
+async function activateKey(key){ // -> {ok, instance, reason}
+  if(!configured()) return {ok:false,reason:'Checkout is not live yet. License keys cannot be checked until the store is set up.'};
+  const j=await lsCall('activate',{license_key:key,instance_name:'PorchBand '+(navigator.platform||'web')});
+  if(!j.activated) return {ok:false,reason:j.error||'That key could not be activated.'};
+  if(!ours(j)){ if(j.instance) lsCall('deactivate',{license_key:key,instance_id:j.instance.id}).catch(()=>{}); return {ok:false,reason:'That key is for a different product.'}; }
+  return {ok:true,instance:j.instance.id}; }
+async function validateKey(key,instance){ if(!configured()) return false; const j=await lsCall('validate',instance?{license_key:key,instance_id:instance}:{license_key:key}); return !!j.valid&&ours(j); }
+function saveLic(){ localStorage.setItem(APP+'-license',JSON.stringify(lic)); }
+function licUI(){ ui.licOff.hidden=!lic.valid; ui.licState.textContent = lic.valid ? 'Licensed: 8 and 16-bar WAV export unlocked. Thank you!' : 'Free demo: play along with every feel, MIDI export, MIDI in/out, and 4-bar WAV export. A license key unlocks 8 and 16-bar WAV export.'; }
 
 // ---------- Web MIDI ----------
 let midiAccess=null, midiOut=null, midiInPort=null; const held=new Set(); let slot=0, chordNotes=null;
@@ -246,7 +257,7 @@ function refreshMidi(){ if(!midiAccess) return;
   midiOut=midiAccess.outputs.get(ui.midiOut.value)||null; }
 
 // ---------- UI ----------
-const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','licState','licKey','licBtn'].forEach(id=>ui[id]=document.getElementById(id));
+const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','licState','licKey','licBtn','licOff','buy'].forEach(id=>ui[id]=document.getElementById(id));
 function setStatus(s){ ui.status.textContent=s; }
 ui.key.innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
 ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bassStyle.value=state.bassStyle; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode;
@@ -276,9 +287,14 @@ ui.exportWav.addEventListener('click',async()=>{ if(!lic.valid&&state.bars>4){ s
   setStatus('Rendering…'); try{ const r=await exportWavBytes(); download(r.bytes,r.name,'audio/wav'); setStatus('Saved '+r.name); }catch(e){ setStatus('Export failed: '+e.message); } });
 ui.exportMid.addEventListener('click',()=>{ const r=exportMidBytes(); download(r.bytes,r.name,'audio/midi'); setStatus('Saved '+r.name); });
 ui.licBtn.addEventListener('click',async()=>{ const k=ui.licKey.value.trim(); if(!k) return; ui.licState.textContent='Checking…';
-  try{ lic.valid=await validateKey(k); lic.key=k; localStorage.setItem(APP+'-license',JSON.stringify(lic)); licUI(); if(!lic.valid) ui.licState.textContent='That key is not valid.'; }
-  catch(e){ ui.licState.textContent='Could not reach Lemon Squeezy. Check your connection.'; } });
-if(lic.valid&&lic.key) validateKey(lic.key).then(v=>{ lic.valid=v; localStorage.setItem(APP+'-license',JSON.stringify(lic)); licUI(); }).catch(()=>{});
+  try{ const r=await activateKey(k); if(r.ok){ Object.assign(lic,{valid:true,key:k,instance:r.instance,checked:Date.now()}); saveLic(); licUI(); ui.licKey.value=''; } else ui.licState.textContent=r.reason; }
+  catch(e){ ui.licState.textContent='Could not reach Lemon Squeezy. Check your connection and try again.'; } });
+ui.licOff.addEventListener('click',async()=>{ if(lic.key&&lic.instance&&configured()) await lsCall('deactivate',{license_key:lic.key,instance_id:lic.instance}).catch(()=>{});
+  for(const k of Object.keys(lic)) delete lic[k]; lic.valid=false; saveLic(); licUI(); });
+if(LEMON.checkoutUrl){ ui.buy.href=LEMON.checkoutUrl; ui.buy.textContent='Buy PorchBand · '+LEMON.price; }
+else { ui.buy.removeAttribute('href'); ui.buy.setAttribute('aria-disabled','true'); ui.buy.textContent='Checkout opening soon · '+LEMON.price; }
+// re-check on load: a refunded/disabled key relocks; offline keeps the last good state
+if(lic.valid&&lic.key) validateKey(lic.key,lic.instance).then(v=>{ lic.valid=v; lic.checked=Date.now(); if(!v) delete lic.instance; saveLic(); licUI(); }).catch(()=>{});
 if(navigator.requestMIDIAccess) navigator.requestMIDIAccess().then(a=>{ midiAccess=a; a.onstatechange=refreshMidi; refreshMidi(); }).catch(()=>{ ui.midiNote.textContent='Web MIDI unavailable or blocked in this browser.'; });
 else ui.midiNote.textContent='Web MIDI not supported in this browser (try Chrome/Edge).';
 renderGrid(); licUI(); showLoad();

@@ -19,7 +19,16 @@ By WorkinWithAI / MPJRecords. It's a static app with no build step: everything s
 - localStorage persistence, tap to start audio, stops when the tab is hidden, iOS silent-switch note
 
 ## Price / license
-**$12 one-time** on Lemon Squeezy (license keys). The free demo includes every feel, playback, MIDI export, MIDI I/O and 4-bar WAV export. A license key, checked in the browser against `https://api.lemonsqueezy.com/v1/licenses/validate`, unlocks 8 and 16-bar WAV export. It's a static app, so the gate works on the honor system.
+**$12 one-time** on Lemon Squeezy (license keys). The free demo includes every feel, playback, MIDI export, MIDI I/O and 4-bar WAV export. A license key unlocks 8 and 16-bar WAV export.
+
+Checkout is configured in ONE place: `const LEMON = { checkoutUrl, storeId, productId }` in `public/app.js`. The flow is:
+1. **Activate:** `POST /v1/licenses/activate`.
+2. **Check the key:** `meta.store_id` and `meta.product_id` must match LEMON. A key for a different product is deactivated again and refused.
+3. **Persist:** the key and instance are saved in localStorage.
+4. **Re-validate on every load:** a refunded or disabled key relocks.
+5. **Remove key:** deactivates the instance.
+
+Until LEMON is filled in, the Buy button reads "Checkout opening soon", no key is sent anywhere and nothing unlocks. It's a static app, so the gate works on the honor system.
 
 ## Run locally
 `npx serve public`, or `python3 -m http.server -d public`. The samples load with fetch(), so open it through a server rather than file://.
