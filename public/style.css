@@ -26,3 +26,6 @@ header{background:linear-gradient(90deg,#6b3b12,#0f1115)}button.big{background:#
 .mk i{font-style:normal;opacity:.55;font-size:10px}.mk.tone.wht{background:#ffd9a8}.mk.tone.blk{background:#8a4f14;color:#fff}.mk.root{box-shadow:inset 0 -5px 0 #d9822b}
 .mk.down.wht,.mk.down.blk{background:#d9822b;color:#fff}
 @media (max-width:520px){.minikeys{height:110px}.mk span{font-size:10px}}
+
+.takes{display:flex;flex-direction:column;gap:6px;margin:8px 0}.take{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#11131a;border:1px solid #2a2f3c;border-radius:8px;padding:6px 8px}
+.take.aud{border-color:#d9822b}.take.rec{box-shadow:0 0 0 1px #e05555}.take .tname{width:110px}.take small{color:#aab;flex:1;min-width:140px}
