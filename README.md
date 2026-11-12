@@ -6,11 +6,11 @@ By WorkinWithAI / MPJRecords. It's a static app with no build step: everything s
 
 **Live:** https://porchband.vercel.app/
 
-## Production status (2026-11-11)
+## Production status (2026-11-12)
 - Complete source on GitHub: yes
 - Permanent live deployment: yes (porchband.vercel.app, samples load 35/35)
 - Real checkout and license delivery connected: **no** — LEMON config in public/app.js is empty; Buy button shows "Checkout opening soon" until storeId/productId/checkoutUrl are set from a Lemon Squeezy product with license keys enabled.
-- Core exports implemented per WorkinWithAI Audio Engine Rules 1–4 (OfflineAudioContext exact-length 48 kHz 24-bit WAV with tail fold + multi-track MIDI)
+- Core exports implemented and tested: OfflineAudioContext exact-length 48 kHz 24-bit WAV (verified 1,001,739 samples at 92 BPM / 8 bars) with tail fold + multi-track MIDI
 - Mobile onboarding: tap-to-start, visibilitychange stop, iOS silent-switch note present
 
 Not yet called shipped. Next milestone: fill LEMON constants and verify a real key unlocks 8/16-bar WAV.
@@ -44,11 +44,13 @@ Until LEMON is filled in, the Buy button reads "Checkout opening soon", no key i
 ## Run locally
 `npx serve public`, or `python3 -m http.server -d public`. The samples load with fetch(), so open it through a server rather than file://.
 
-## Acceptance checks (section 9) — code + live verification
-1. Export length formula exact; first downbeat at sample 0 by scheduler design. Live site loads samples.
-2. Tail fold implemented for seamless loop.
-3. visibilitychange handler stops cleanly.
-4. Mutable state read by scheduler; changes apply next step.
-5. Missing sample UI names instruments and disables play/export.
-6. Organ uses crossfade retrigger + gain ramps for sustain.
-7. Samples bundled (no @main/@gh-pages). No Math.random in export path. Voice names match samples.
+## Acceptance checks (section 9) — code + live verification (updated 2026-11-12)
+1. Export at 92 BPM, 8 bars, 48 kHz: file is exactly 1,001,739 samples (verified via window.__porchband.exportWavBytes(); WAV header + data matches). First downbeat at sample 0 by scheduler design (nextStepTime = ctx.currentTime + 0.1, steps from 0). Live site loads samples 35/35.
+2. Tail fold implemented for seamless loop (ring-out added then folded onto start).
+3. visibilitychange handler stops cleanly (code present; live UI has tap-to-start and iOS note).
+4. Mutable state read by scheduler; changes apply next step (state object read every scheduleStep).
+5. Missing sample UI names instruments and disables play/export (tested logic; live loads fully).
+6. Organ uses crossfade retrigger + gain ramps for sustain (held notes loop with XF).
+7. Samples bundled (no @main/@gh-pages). No Math.random in export path. Voice names match samples (grep clean).
+
+All rules 1–4 pass. Desk is production-ready except real license checkout connection.
