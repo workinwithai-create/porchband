@@ -255,16 +255,17 @@ function buildBus(){
   master = ctx.createDynamicsCompressor(); master.threshold.value = -8; master.knee.value = 6; master.ratio.value = 8; master.attack.value = 0.003; master.release.value = 0.15;
   master.connect(ctx.destination);
   for (const r of ROWS) { const g = ctx.createGain(); g.gain.value = state.gains[r.id]; g.connect(master); chairs[r.id] = g; }
+  chairs.live = ctx.createGain(); chairs.live.connect(master);
 }
 
 // ---------- transport ----------
-let timerId = null, nextStepTime = 0, step = 0, bar = 0, countLeft = 0, playing = false, pendingMove = null, curMove = null, pass = 0;
+let shownBar = 0, timerId = null, nextStepTime = 0, step = 0, bar = 0, countLeft = 0, playing = false, pendingMove = null, curMove = null, pass = 0;
 const stepLog = [];
 const regionLen = () => state.loopTo - state.loopFrom + 1;
 function start(){
   if (!ctx || ctx.state !== 'running' || instStatus.kit !== 'ready') return;
   if (state.trainer) setBpm(state.trainStart);
-  step = 0; bar = state.loopFrom - 1; pass = 0; curMove = null; pendingMove = null; countLeft = state.countIn ? 16 : 0; stepLog.length = 0;
+  step = 0; bar = state.loopFrom - 1; shownBar = bar; pass = 0; curMove = null; pendingMove = null; countLeft = state.countIn ? 16 : 0; stepLog.length = 0;
   nextStepTime = ctx.currentTime + 0.1; playing = true;
   timerId = setInterval(scheduler, LOOKAHEAD_MS); scheduler();
   ui.play.textContent = '■ Stop'; requestAnimationFrame(draw); setStatus(state.countIn ? 'Count-in…' : '');
@@ -274,7 +275,6 @@ function stop(){
   for (const s of active) { try { s.stop(); } catch (e) {} } active.clear();
   if (ui.play) ui.play.textContent = '▶ Play';
   document.querySelectorAll('.bar').forEach(b => b.classList.remove('on'));
-  if (rec) stopRec();
 }
 function scheduler(){
   while (nextStepTime < ctx.currentTime + SCHEDULE_AHEAD) {
@@ -311,7 +311,7 @@ function draw(){
     else {
       const sd = 60 / state.bpm / 4, frac = (cur.step + Math.min(1, (now - cur.time) / sd)) / 16;
       const nb = cur.bar + 1 > state.loopTo - 1 ? state.loopFrom - 1 : cur.bar + 1;
-      ui.chordNow.textContent = chordName(cur.bar); ui.chordNext.textContent = chordName(nb, pendingMove === 'keyup' ? 1 : 0); ui.barNow.textContent = cur.bar + 1;
+      ui.chordNow.textContent = chordName(cur.bar); ui.chordNext.textContent = chordName(nb, pendingMove === 'keyup' ? 1 : 0); ui.barNow.textContent = cur.bar + 1; shownBar = cur.bar;
       if (status.textContent === 'Count-in…') setStatus('');
       document.querySelectorAll('.bar').forEach((b, i) => { b.classList.toggle('on', i === cur.bar); if (i === cur.bar) b.querySelector('.ph').style.left = (frac * 100) + '%'; });
     }
@@ -320,31 +320,9 @@ function draw(){
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && playing) { stop(); setStatus('Stopped (tab hidden).'); } });
 
-// ---------- recording a take ----------
-let rec = null, recChunks = [], takeNo = 0;
-async function startRec(){
-  if (!navigator.mediaDevices || !window.MediaRecorder) { ui.recInfo.textContent = 'This browser cannot record audio.'; return; }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    recChunks = []; rec = new MediaRecorder(stream);
-    rec.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
-    rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); addTake(new Blob(recChunks, { type: rec.mimeType || 'audio/webm' })); rec = null; ui.recBtn.textContent = '● Record'; };
-    rec.start(); ui.recBtn.textContent = '■ Stop recording'; ui.recInfo.textContent = 'Recording…';
-    if (!playing) start();
-  } catch (e) { ui.recInfo.textContent = 'Microphone not available: ' + e.message; }
-}
-function stopRec(){ if (rec && rec.state !== 'inactive') rec.stop(); }
-function addTake(blob){
-  takeNo++; const url = URL.createObjectURL(blob), ext = /ogg/.test(blob.type) ? 'ogg' : /mp4|aac/.test(blob.type) ? 'm4a' : 'webm';
-  const name = `jamroom-take${takeNo}-${state.style}-${state.bpm}bpm-${NAMES[pc(state.keyRoot)].replace('#', 's')}.${ext}`;
-  const row = document.createElement('div'); row.className = 'take';
-  row.innerHTML = `<b>Take ${takeNo}</b><audio controls src="${url}"></audio><a download="${name}" href="${url}">Download</a>`;
-  ui.takes.prepend(row); ui.recInfo.textContent = 'Saved take ' + takeNo + '. It stays in this browser until you download it.';
-}
-
 // ---------- UI ----------
 const $ = id => document.getElementById(id);
-const ui = {}; for (const id of ['tap','tapBtn','style','bpm','key','chords','chordErr','loopLen','loopFrom','loopTo','myPart','play','countIn','keyReset','status','chordNow','chordNext','barNow','grid','band','trainer','trainStart','trainTarget','trainStep','recBtn','recInfo','takes']) ui[id] = $(id);
+const ui = {}; for (const id of ['tap','tapBtn','style','bpm','key','chords','chordErr','loopLen','loopFrom','loopTo','myPart','play','countIn','keyReset','status','chordNow','chordNext','barNow','grid','band','trainer','trainStart','trainTarget','trainStep','keysPanel','rigPanel']) ui[id] = $(id);
 const status = ui.status;
 function setStatus(t){ if (status) status.textContent = t; }
 function fillSelect(sel, items, val){ sel.innerHTML = items.map(([v, l]) => `<option value="${v}">${l}</option>`).join(''); sel.value = String(val); }
@@ -416,15 +394,19 @@ function initUI(){
     if (!playing) { setStatus('Press Play first, then use the moves.'); return; }
     pendingMove = pendingMove === b.dataset.move ? null : b.dataset.move; markMoves(); }));
   ui.keyReset.addEventListener('click', () => { moveShift = 0; renderGrid(); });
-  ui.recBtn.addEventListener('click', () => rec ? stopRec() : startRec());
   document.addEventListener('keydown', e => { if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); ui.play.click(); } });
   ui.tapBtn.addEventListener('click', async () => {
     try {
       if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR }); buildBus(); }
-      await ctx.resume(); ui.tap.classList.add('hide'); ensureInst('kit'); loadNeeded(); showLoad();
+      await ctx.resume(); ui.tap.classList.add('hide'); ensureInst('kit'); loadNeeded(); showLoad(); if (keys) keys.ensure();
     } catch (e) { setStatus('Audio could not start: ' + e.message); }
   });
 }
 initUI();
-window.__jam = { state, stepEvents, sampleList, resolveNote, MAX_SHIFT, STYLES, ROWS, PARTS, parseProg, get prog(){ return prog; }, start, stop, get playing(){ return playing; },
+const player = window.WWInstruments ? WWInstruments.create(() => ctx, '../samples/') : null;
+const keys = player && window.WWKeys ? WWKeys.mount(ui.keysPanel, { player, getDest: () => chairs.live, storeKey: APP + '-keys',
+  getChordTones: () => { const cx = ctxFor(playing ? shownBar : state.loopFrom - 1); return cx.ivs.map(iv => pc(cx.root + iv)); } }) : null;
+const rig = window.WWRig ? WWRig.mount(ui.rigPanel, { getCtx: () => ctx, getBpm: () => state.bpm, onRecordStart: () => { if (!playing) start(); },
+  storeKey: APP + '-rig', filePrefix: APP }) : null;
+window.__jam = { player, get keys(){ return keys; }, get rig(){ return rig; }, state, stepEvents, sampleList, resolveNote, MAX_SHIFT, STYLES, ROWS, PARTS, parseProg, get prog(){ return prog; }, start, stop, get playing(){ return playing; },
   get ctx(){ return ctx; }, ensureInst, instStatus, setCtx(c){ ctx = c; buildBus(); } };

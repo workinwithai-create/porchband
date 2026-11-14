@@ -278,6 +278,9 @@ window.__liveLog=[];
 function liveDest(){ if(!liveGainNode){ liveGainNode=ctx.createGain(); liveGainNode.gain.value=state.liveGain; liveGainNode.connect(bus.comp); } return liveGainNode; }
 function foldNote(id,n){ const [lo,hi]=liveRange(id); return inRange(n,lo,hi); }
 function liveOn(note,vel,src){
+  if(!LIVE_INST.includes(state.liveInst)){ // a shared instrument (more sounds): played live, not recorded into note takes
+    if(!ctx||ctx.state!=='running'){ setStatus('Tap to start audio first, then play.'); return; }
+    if(window.__wwPlayer&&window.__wwPlayer.noteOn(state.liveInst,note,vel,liveDest(),src+':'+note)) keyVis(note,true); return; }
   if(!ctx||ctx.state!=='running'||!liveBufs){ setStatus('Tap to start audio first, then play.'); return; }
   const id=state.liveInst, n=foldNote(id,note), key=src+':'+note;
   if(liveVoices.has(key)) releaseVoice(liveVoices.get(key),ctx.currentTime);
@@ -294,13 +297,13 @@ function liveOn(note,vel,src){
 }
 function releaseVoice(vo,t){ if(vo.done) return; vo.done=true; const rel=REL[vo.id]||0.1; const g=vo.g.gain;
   g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(0,t+rel); try{ vo.s.stop(t+rel+0.02); }catch(e){} }
-function liveOff(note,src){ const key=src+':'+note, vo=liveVoices.get(key); keyVis(note,false);
+function liveOff(note,src){ if(window.__wwPlayer) window.__wwPlayer.noteOff(src+':'+note); const key=src+':'+note, vo=liveVoices.get(key); keyVis(note,false);
   window.__liveLog.push({ev:'off',note,src,perf:performance.now(),ctxNow:ctx?ctx.currentTime:0,sustain});
   closeRec(key);
   if(!vo) return; if(sustain){ vo.sustained=true; return; } liveVoices.delete(key); releaseVoice(vo,ctx.currentTime); }
-function setSustain(down){ sustain=down; window.__liveLog.push({ev:'cc64',down,perf:performance.now()});
+function setSustain(down){ sustain=down; if(window.__wwPlayer) window.__wwPlayer.setSustain(down); window.__liveLog.push({ev:'cc64',down,perf:performance.now()});
   if(!down&&ctx) for(const [k,vo] of liveVoices) if(vo.sustained){ liveVoices.delete(k); releaseVoice(vo,ctx.currentTime); } }
-function liveAllOff(){ if(!ctx) return; for(const [k,vo] of liveVoices) releaseVoice(vo,ctx.currentTime); liveVoices.clear(); sustain=false; document.querySelectorAll('.mk.down').forEach(k=>k.classList.remove('down')); }
+function liveAllOff(){ if(window.__wwPlayer) window.__wwPlayer.allOff(); if(!ctx) return; for(const [k,vo] of liveVoices) releaseVoice(vo,ctx.currentTime); liveVoices.clear(); sustain=false; document.querySelectorAll('.mk.down').forEach(k=>k.classList.remove('down')); }
 // position (in 16th steps, fractional) of audio time t within the running loop, from the scheduler's own step log
 // position of audio time t inside the running loop (16th steps, fractional) + which loop pass, from the scheduler's own step log
 function transportPos(t){ let cur=null; for(const e of stepLog){ if(e.time<=t) cur=e; else break; } if(!cur) return null;
@@ -417,7 +420,7 @@ ui.bars.addEventListener('change',()=>{ state.bars=+ui.bars.value; save(); });
 ui.preset.addEventListener('change',()=>{ if(ui.preset.value){ ui.chords.value=ui.preset.value; state.keyRoot=parseProg(ui.preset.value)[0].root; ui.key.value=state.keyRoot; prog=parseProg(ui.preset.value); onChords(); } });
 ui.midiInMode.addEventListener('change',()=>{ state.midiInMode=ui.midiInMode.value; held.clear(); chordNotes=null; liveAllOff(); save(); });
 ui.midiTransport.addEventListener('change',()=>{ state.midiTransport=ui.midiTransport.checked; save(); });
-ui.liveInst.addEventListener('change',()=>{ liveAllOff(); state.liveInst=ui.liveInst.value; save(); });
+ui.liveInst.addEventListener('change',()=>{ liveAllOff(); state.liveInst=ui.liveInst.value; save(); if(window.__wwPlayer&&!LIVE_INST.includes(state.liveInst)) window.__wwPlayer.ensure(state.liveInst); });
 ui.liveGainIn.addEventListener('input',()=>{ state.liveGain=+ui.liveGainIn.value; if(liveGainNode) liveGainNode.gain.setTargetAtTime(state.liveGain,ctx.currentTime,0.01); save(); });
 ui.liveOctDn.addEventListener('click',()=>{ state.liveOct=Math.max(1,state.liveOct-1); save(); renderKeys(); });
 ui.liveOctUp.addEventListener('click',()=>{ state.liveOct=Math.min(6,state.liveOct+1); save(); renderKeys(); });
@@ -434,7 +437,7 @@ ui.parts.addEventListener('input',e=>{ const m=e.target.dataset.mute, g=e.target
   save(); });
 async function togglePlay(){ await ensureCtx(); playing?stop():start(); }
 ui.play.addEventListener('click',togglePlay);
-ui.tapBtn.addEventListener('click',async()=>{ ui.tapBtn.textContent='Starting…'; await ensureCtx(); if(ctx.state==='running') ui.tap.classList.add('hide'); showLoad(); });
+ui.tapBtn.addEventListener('click',async()=>{ ui.tapBtn.textContent='Starting…'; await ensureCtx(); if(ctx.state==='running') ui.tap.classList.add('hide'); showLoad(); if(window.__wwPlayer&&!LIVE_INST.includes(state.liveInst)) window.__wwPlayer.ensure(state.liveInst); });
 ui.exportWav.addEventListener('click',async()=>{ if(!lic.valid&&state.bars>4){ setStatus('Demo: 4-bar WAV export. Unlock below for 8/16 bars.'); return; }
   setStatus('Rendering…'); try{ const r=await exportWavBytes(); download(r.bytes,r.name,'audio/wav'); setStatus('Saved '+r.name); }catch(e){ setStatus('Export failed: '+e.message); } });
 ui.exportMid.addEventListener('click',()=>{ const r=exportMidBytes(); download(r.bytes,r.name,'audio/midi'); setStatus('Saved '+r.name); });

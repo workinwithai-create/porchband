@@ -62,16 +62,21 @@
 </section>
 
 <section class="card">
- <h3>Record a take</h3>
- <div class="row">
-  <button id="recBtn">● Record</button>
-  <small id="recInfo" class="note">Records your mic or interface while the band plays. Your takes stay in this browser until you download them.</small>
- </div>
- <div id="takes" class="takes"></div>
+ <h3>Play an instrument</h3>
+ <div id="keysPanel"></div>
 </section>
 
-<p class="note">Real recorded instruments only. Upright piano, pipe organ, upright bass and the acoustic drum kit are bundled CC0 samples (see <a href="../samples/CREDITS.md">samples/CREDITS.md</a>). The other instruments are FluidR3 GM (MIT), loaded from a pinned commit when a row first uses them.</p>
+<section class="card">
+ <h3>Plug in: guitar amp or vocal chain</h3>
+ <p class="note" style="margin:0 0 4px">Plug a guitar into your audio interface, or sing into a mic, and play through an amp or a vocal chain over the band. Recording a take starts the band if it isn't playing.</p>
+ <div id="rigPanel"></div>
+</section>
+
+<p class="note">Real recorded instruments only. Upright piano, pipe organ, upright bass and the acoustic drum kit are bundled CC0 samples (see <a href="../samples/CREDITS.md">samples/CREDITS.md</a>). The other instruments are FluidR3 GM (MIT), loaded from a pinned commit when they are first used. The amps and vocal chains are built from Web Audio filters, a waveshaper and a compressor; the cabinet and the reverb room are modelled, not recorded impulses.</p>
 </main>
 <footer>WorkinWithAI · MPJRecords · Pipe Dreams Studio</footer>
+<script src="../shared/instruments.js"></script>
+<script src="../shared/keys.js"></script>
+<script src="../shared/rig.js"></script>
 <script src="jam.js"></script>
 </body></html>

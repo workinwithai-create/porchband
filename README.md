@@ -22,7 +22,14 @@ A practice band built from the best parts of the WorkinWithAI bar desks. You pic
 - **Live moves on the next bar:** Fill, Stop, Break, Build and Key up, plus Key reset.
 - **Practice tools:** loop any bars (tap a bar, then another), a tempo trainer that adds BPM each pass, "I'm playing" (leaves out your part), count-in, a big Now/Next chord chart, and recording takes from your mic.
 - **Sounds:** the bundled CC0 instruments plus FluidR3 GM from a pinned commit, loaded when a row first uses them. If a sample fails, that row says so and stays silent while the rest plays.
+- **Play an instrument:** 21 playable sounds (pianos, Rhodes, organs, guitars, basses, strings, cello, choir, horns, trumpet, tenor sax, harmonica, flute, vibes, marimba) from on-screen keys, computer keys or a MIDI keyboard with velocity and sustain. The notes of the chord playing now light up.
+- **Plug in:** a guitar amp (Clean, Crunch, Blues, High-gain lead, Acoustic DI) or a vocal chain (Natural, Pop, Ballad, Old radio) for your mic or audio interface, with knobs, an input meter, "Hear myself" monitoring and recorded takes of the processed sound.
 - **Not in v1:** WAV/MIDI export, sign-in and the Pipe Dreams Studio song library. Those come next.
+
+## Shared parts (`public/shared/`)
+- `instruments.js`: the playable sample instruments, used by Jam Room and by PorchBand's live picker ("More instruments").
+- `keys.js`: the play-an-instrument panel (on-screen keys, computer keys, MIDI in).
+- `rig.js`: the guitar amp and vocal chain, built from Web Audio filters, a waveshaper, a compressor and a delay. The cabinet and the reverb room are modelled, not recorded impulses. PorchBand and Jam Room both use it.
 
 ## Features
 - BPM 60–180, key selector (transposes everything; chord 1 lands on the chosen root), 4-chord entry (`C G Am F`, supports m, 7, m7, maj7, dim, sus2, sus4) that replaces the presets
