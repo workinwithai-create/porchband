@@ -9,3 +9,10 @@ All files were trimmed, converted to mono where noted, resampled to 48 kHz, norm
 | kick, snare, hat, ride.flac | Acoustic drum kit: kick (close kick mic, snares off), snare center hit, closed hi-hat, ride | Virtuosity Drums, `Samples/kickmic/kick/kickmic_kick_snoff_vl3_rr1.flac` (kick) and `Samples/mid/…` (snare, hats, ride; mid mic) — https://github.com/sfzinstruments/virtuosity_drums | CC0-1.0 |
 
 The organ and piano Info.txt files say: "Bearer is granted right to redistribute this sample set by Versilian Studios LLC. Credit to both original author and Versilian Studios is encouraged."
+| drums/ghost.flac, drums/rim.flac, drums/ohat.flac | Acoustic drum kit: soft snare (mid_snare_center_vl4), cross-stick rim click (mid_snare_crossstick_vl10), open hi-hat (mid_hh_open_vl3_rr1). Used by Jam Room | Virtuosity Drums @ `9f04cf9a734527edfbb0a4eee1f674e45bbf71bc`, copied from RangeKit's bundled kit (trimmed with a 120 ms fade-out, 48 kHz 16-bit FLAC) | CC0-1.0 |
+
+## Jam Room's other instruments
+Jam Room (`/jam/`) also loads FluidR3 GM (MIT) MP3 renders from gleitz/midi-js-soundfonts (MIT), pinned to commit `044fab8e1456bfafc5776e86dfd6bb8697149aef` on jsDelivr, with raw.githubusercontent at the same commit as a fallback. Instruments: acoustic_grand_piano, electric_piano_1, drawbar_organ, electric_bass_finger, acoustic_guitar_nylon, acoustic_guitar_steel, electric_guitar_clean, electric_guitar_muted, string_ensemble_1, choir_aahs, brass_section, trumpet, tenor_sax, harmonica, vibraphone, marimba, flute, cello. PorchBand's "More instruments" live picker uses the same set (`public/shared/instruments.js`). One sample every 4 semitones, so pitch shift stays within ±2 (never more than ±4).
+
+## Amps and vocal chains
+`public/shared/rig.js` uses no samples. It is built from Web Audio filters, a waveshaper, a compressor and a delay. The reverb tail is a computed room (decaying noise), not a recorded impulse response.
