@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jam Room: a real-instrument band to practice with</title>
+<link rel="stylesheet" href="jam.css"></head>
+<body>
+<div id="tap" class="tap"><button id="tapBtn">Tap to start audio</button><p>iOS: the silent switch mutes Web Audio. Flip it off to hear sound.</p></div>
+<header>
+ <h1>Jam Room</h1>
+ <p class="tag">Pick a style, type your chords, and practice with a real-instrument band. Loop the hard part, slow it down, and mute the part you're playing.</p>
+ <a class="back" href="../">← PorchBand</a>
+</header>
+<main>
+<p id="loadStatus" class="load">Loading samples…</p>
+
+<section class="card">
+ <div class="row">
+  <label>Style <select id="style"></select></label>
+  <label>BPM <input id="bpm" type="number" min="40" max="200" step="1"></label>
+  <label>Key <select id="key"></select></label>
+  <label class="grow">Chords (1 to 8, one per bar) <input id="chords" placeholder="C G Am F"><small id="chordErr"></small></label>
+ </div>
+ <div class="row">
+  <label>Loop length <select id="loopLen"><option value="4">4 bars</option><option value="8">8 bars</option><option value="16">16 bars</option></select></label>
+  <label>Loop from bar <select id="loopFrom"></select></label>
+  <label>to bar <select id="loopTo"></select></label>
+  <label>I'm playing <select id="myPart"><option value="">(just listening)</option><option value="drums">Drums</option><option value="bass">Bass</option><option value="keys">Keys</option><option value="guitar">Guitar</option><option value="color">Color</option></select></label>
+ </div>
+</section>
+
+<section class="transport">
+ <button id="play" class="big" disabled>▶ Play</button>
+ <label class="chk"><input type="checkbox" id="countIn"> Count-in</label>
+ <span class="moves">
+  <button data-move="fill" title="Drum fill on the next bar">Fill</button>
+  <button data-move="stop" title="Everyone hits beat 1 of the next bar, then rests">Stop</button>
+  <button data-move="break" title="Next bar drops to kick, hats and bass">Break</button>
+  <button data-move="build" title="Next bar builds into the following one">Build</button>
+  <button data-move="keyup" title="Everything moves up a half step from the next bar">Key up</button>
+  <button id="keyReset" title="Back to the key you picked">Key reset</button>
+ </span>
+ <span id="status" class="status"></span>
+</section>
+
+<section class="chart">
+ <div class="now"><small>Now</small><b id="chordNow">–</b></div>
+ <div class="next"><small>Next</small><b id="chordNext">–</b></div>
+ <div class="pos"><small>Bar</small><b id="barNow">–</b></div>
+</section>
+<section class="grid" id="grid"></section>
+
+<section class="band" id="band"></section>
+
+<section class="card">
+ <h3>Tempo trainer</h3>
+ <div class="row">
+  <label class="chk"><input type="checkbox" id="trainer"> Speed up each time the loop comes round</label>
+  <label>Start BPM <input id="trainStart" type="number" min="40" max="200" step="1"></label>
+  <label>Target BPM <input id="trainTarget" type="number" min="40" max="200" step="1"></label>
+  <label>Add per pass <input id="trainStep" type="number" min="1" max="20" step="1"></label>
+ </div>
+ <small class="note">When it's on, Play starts at the start BPM and adds a little every pass until it reaches the target.</small>
+</section>
+
+<section class="card">
+ <h3>Play an instrument</h3>
+ <div id="keysPanel"></div>
+</section>
+
+<section class="card">
+ <h3>Plug in: guitar amp or vocal chain</h3>
+ <p class="note" style="margin:0 0 4px">Plug a guitar into your audio interface, or sing into a mic, and play through an amp or a vocal chain over the band. Recording a take starts the band if it isn't playing.</p>
+ <div id="rigPanel"></div>
+</section>
+
+<p class="note">Real recorded instruments only. Upright piano, pipe organ, upright bass and the acoustic drum kit are bundled CC0 samples (see <a href="../samples/CREDITS.md">samples/CREDITS.md</a>). The other instruments are FluidR3 GM (MIT), loaded from a pinned commit when they are first used. The amps and vocal chains are built from Web Audio filters, a waveshaper and a compressor; the cabinet and the reverb room are modelled, not recorded impulses.</p>
+</main>
+<footer>WorkinWithAI · MPJRecords · Pipe Dreams Studio</footer>
+<script src="../shared/instruments.js"></script>
+<script src="../shared/keys.js"></script>
+<script src="../shared/rig.js"></script>
+<script src="jam.js"></script>
+</body></html>
