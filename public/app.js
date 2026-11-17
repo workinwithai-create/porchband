@@ -249,4 +249,204 @@ function licUI(){ ui.licOff.hidden=true; ui.licState.textContent = 'Free: full 4
 
 // ---------- Web MIDI ----------
 let midiAccess=null, midiOut=null, midiInPort=null; const held=new Set(); let slot=0, chordNotes=null;
-function midiSend(ev,time,sd){ if(!midiOut||!ctx) return; const p=PARTS.find(x=>x.id===ev.part),
+function midiSend(ev,time,sd){ if(!midiOut||!ctx) return; const p=PARTS.find(x=>x.id===ev.part), at=performance.now()+(time-ctx.currentTime)*1000, v=Math.max(1,Math.round(ev.vel*110));
+  midiOut.send([0x90|p.ch,ev.note,v],at); midiOut.send([0x80|p.ch,ev.note,0],at+ev.dur*sd*1000-5); }
+function chordFromNotes(notes){ const pcs=[...new Set([...notes].map(n=>n%12))], bass=Math.min(...notes)%12;
+  for(const r of [bass,...pcs]) for(const [q,ivs] of Object.entries({'':[0,4,7],m:[0,3,7],'7':[0,4,7,10],m7:[0,3,7,10],maj7:[0,4,7,11],dim:[0,3,6]})){
+    const set=ivs.map(i=>(r+i)%12); if(set.length===pcs.length&&set.every(x=>pcs.includes(x))) return NAMES[r]+q; } return null; }
+function onMidiMsg(e){ const d=e.data, s=d[0], cmd=s&0xF0, n=d[1], v=d[2];
+  // Transport: ONLY MIDI realtime Start/Continue/Stop, and only if the user opted in. Notes never touch transport.
+  if(s===0xFA||s===0xFB){ if(state.midiTransport&&!playing) togglePlay(); return; }
+  if(s===0xFC){ if(state.midiTransport&&playing) stop(); return; }
+  if(s>=0xF0) return; // clock, active sensing etc.
+  if(cmd===0xB0&&n===64){ setSustain(v>=64); return; }
+  if(cmd===0xB0&&(n===123||n===120)){ liveAllOff(); return; }
+  const on=cmd===0x90&&v>0, off=cmd===0x80||(cmd===0x90&&v===0);
+  if(state.midiInMode==='play'){ if(on) liveOn(n,v/127,'midi'); else if(off) liveOff(n,'midi'); return; }
+  if(on){ held.add(n); chordNotes=new Set(held); }
+  else if(off){ held.delete(n);
+    if(held.size===0&&chordNotes&&chordNotes.size>=3){ const c=chordFromNotes(chordNotes); chordNotes=null;
+      if(c){ const t=ui.chords.value.trim().split(/\s+/); while(t.length<4) t.push('C'); t[slot]=c; slot=(slot+1)%4; ui.chords.value=t.join(' '); onChords(); } } } }
+
+// ---------- live play-along: MIDI keyboard / computer keys / on-screen keys -> the desk's real samples ----------
+// Immediate trigger at ctx.currentTime. Runs beside the lookahead scheduler and never touches its state.
+const LIVE_INST=['piano','bass','organ'];
+const liveRange=id=>{ const r=INSTR[id].roots; return [r[0]-MAX_SHIFT, r[r.length-1]+MAX_SHIFT]; };
+const liveVoices=new Map(); // key "src:note" -> voice
+let sustain=false, liveGainNode=null; const liveOpen=new Map(); let session=0, passNo=0;
+window.__liveLog=[];
+function liveDest(){ if(!liveGainNode){ liveGainNode=ctx.createGain(); liveGainNode.gain.value=state.liveGain; liveGainNode.connect(bus.comp); } return liveGainNode; }
+function foldNote(id,n){ const [lo,hi]=liveRange(id); return inRange(n,lo,hi); }
+function liveOn(note,vel,src){
+  if(!ctx||ctx.state!=='running'||!liveBufs){ setStatus('Tap to start audio first, then play.'); return; }
+  const id=state.liveInst, n=foldNote(id,note), key=src+':'+note;
+  if(liveVoices.has(key)) releaseVoice(liveVoices.get(key),ctx.currentTime);
+  const r=pickSample(id,n), buf=liveBufs[id][r], rate=Math.pow(2,(n-r)/12), t=ctx.currentTime;
+  const g=ctx.createGain(), vg=Math.max(0.05,Math.pow(vel,1.5)); g.connect(liveDest());
+  const s=ctx.createBufferSource(); s.buffer=buf; s.playbackRate.value=rate;
+  if(id==='organ'){ s.loop=true; s.loopStart=Math.min(1.0,buf.duration*0.3); s.loopEnd=buf.duration-0.05; } // held organ sustains
+  s.connect(g); g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vg,t+(id==='organ'?0.03:0.002));
+  s.start(t); if(id!=='organ') s.stop(t+buf.duration/rate);
+  const vo={s,g,id,vg,sustained:false,done:false}; s.onended=()=>{ vo.done=true; if(liveVoices.get(key)===vo) liveVoices.delete(key); };
+  liveVoices.set(key,vo); keyVis(note,true);
+  window.__liveLog.push({ev:'on',note,n,vel,src,perf:performance.now(),startAt:t,ctxNow:ctx.currentTime}); if(window.__liveLog.length>500) window.__liveLog.shift();
+  if(state.liveRec&&playing){ const p=transportPos(t); if(p){ const tk=takeFor(p.pass,id); if(tk) liveOpen.set(key,{note:n,vel,pos:p.pos,take:tk}); } }
+}
+function releaseVoice(vo,t){ if(vo.done) return; vo.done=true; const rel=REL[vo.id]||0.1; const g=vo.g.gain;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(0,t+rel); try{ vo.s.stop(t+rel+0.02); }catch(e){} }
+function liveOff(note,src){ const key=src+':'+note, vo=liveVoices.get(key); keyVis(note,false);
+  window.__liveLog.push({ev:'off',note,src,perf:performance.now(),ctxNow:ctx?ctx.currentTime:0,sustain});
+  closeRec(key);
+  if(!vo) return; if(sustain){ vo.sustained=true; return; } liveVoices.delete(key); releaseVoice(vo,ctx.currentTime); }
+function setSustain(down){ sustain=down; window.__liveLog.push({ev:'cc64',down,perf:performance.now()});
+  if(!down&&ctx) for(const [k,vo] of liveVoices) if(vo.sustained){ liveVoices.delete(k); releaseVoice(vo,ctx.currentTime); } }
+function liveAllOff(){ if(!ctx) return; for(const [k,vo] of liveVoices) releaseVoice(vo,ctx.currentTime); liveVoices.clear(); sustain=false; document.querySelectorAll('.mk.down').forEach(k=>k.classList.remove('down')); }
+// position (in 16th steps, fractional) of audio time t within the running loop, from the scheduler's own step log
+// position of audio time t inside the running loop (16th steps, fractional) + which loop pass, from the scheduler's own step log
+function transportPos(t){ let cur=null; for(const e of stepLog){ if(e.time<=t) cur=e; else break; } if(!cur) return null;
+  return {pos:cur.step+(t-cur.time)/(60/state.bpm/4), pass:cur.pass}; }
+// ---- takes: every loop pass while recording is a NEW take; persisted so nothing is lost on reload ----
+const TAKE_CAP=16, TAKE_KEY=APP+'-takes';
+const takes=(()=>{ try{ const a=JSON.parse(localStorage.getItem(TAKE_KEY)||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } })();
+let recTake=null; // take being recorded in the current pass
+function saveTakes(){ try{ localStorage.setItem(TAKE_KEY,JSON.stringify(takes)); }catch(e){ setStatus('Could not save takes in this browser (storage full?). Export them now.'); } }
+const audible=t=>t.mode==='loop'&&!t.muted&&t.notes.length>0;
+function takeFor(pass,inst){
+  if(recTake&&recTake.session===session&&recTake.pass===pass) return recTake;
+  if(takes.length>=TAKE_CAP){ setStatus(`Take limit (${TAKE_CAP}) reached. Export or delete takes to record more.`); return null; }
+  const n=takes.reduce((m,t)=>Math.max(m,t.n),0)+1;
+  for(const t of takes) if(t.mode==='loop') t.mode='silent'; // only the newest take is audible by default
+  recTake={id:Date.now()+'-'+n,n,name:'Take '+n,inst,bars:state.bars,bpm:state.bpm,mode:'loop',muted:false,notes:[],session,pass};
+  takes.push(recTake); saveTakes(); renderTakes(); return recTake; }
+function closeRec(key,atEnd){ const o=liveOpen.get(key); if(!o||!ctx) return; liveOpen.delete(key);
+  const L=o.take.bars*16, p=atEnd?null:transportPos(ctx.currentTime);
+  // a note held past the loop boundary (or past stop) ends at the boundary in its own take
+  let end = (p&&p.pass===o.take.pass&&o.take.session===session&&p.pos>=o.pos) ? p.pos : L;
+  o.take.notes.push({note:o.note,vel:+o.vel.toFixed(3),pos:+o.pos.toFixed(4),dur:+Math.max(0.25,Math.min(end,L)-o.pos).toFixed(4)});
+  saveTakes(); renderTakes(); }
+function closeAllRec(){ for(const k of [...liveOpen.keys()]){ const o=liveOpen.get(k); const p=ctx?transportPos(ctx.currentTime):null;
+    closeRec(k, !(p&&p.pass===o.take.pass)); } recTake=null; }
+function takeEvents(tk,st){ const L=st.bars*16, out=[]; // every take starts at bar 1 on the grid; quantize to 16ths only if chosen
+  for(const x of tk.notes){ let pos=x.pos, dur=x.dur; if(st.liveQuant){ pos=Math.round(pos); dur=Math.max(1,Math.round(dur)); }
+    if(pos>=L||pos<0) continue; out.push({part:tk.inst,note:foldNote(tk.inst,x.note),vel:x.vel,pos,dur:Math.min(dur,L-pos)}); }
+  return out.sort((a,b)=>a.pos-b.pos); }
+// Loop-mode takes play back with the band (reads current take state each step, like every other control)
+function scheduleTakes(st,time,sd){ if(!liveBufs) return;
+  for(const tk of takes){ if(!audible(tk)||tk===recTake) continue; const L=tk.bars*16, loc=st%L;
+    for(const ev of takeEvents(tk,{bars:tk.bars,liveQuant:state.liveQuant})) if(Math.floor(ev.pos)===loc) voice(ctx,liveBufs,liveDest(),ev,time+(ev.pos-loc)*sd,sd,true); } }
+function recUI(){ renderTakes(); }
+function renderTakes(){ const box=document.getElementById('takes'), info=document.getElementById('liveTakeInfo'); if(!box) return;
+  if(info) info.textContent=takes.length?`${takes.length} take${takes.length>1?'s':''} saved (max ${TAKE_CAP}). WAV/MIDI include takes set to Loop and not muted; MIDI lists every take.`:'No takes yet. Tick Record, press Play, and play: each loop pass becomes a new take.';
+  box.innerHTML=takes.map((t,i)=>`<div class="take${audible(t)?' aud':''}${t===recTake?' rec':''}" data-i="${i}">
+   <input class="tname" value="${t.name.replace(/"/g,'&quot;')}" data-act="name" aria-label="Take name">
+   <small>${t.notes.length} notes · ${INSTR[t.inst].name} · ${t.bars} bars</small>
+   <select data-act="mode"><option value="loop"${t.mode==='loop'?' selected':''}>Loop</option><option value="silent"${t.mode==='silent'?' selected':''}>Silent</option></select>
+   <label class="chk"><span><input type="checkbox" data-act="mute"${t.muted?' checked':''}> Mute</span></label>
+   <button data-act="del">Delete</button></div>`).join(''); }
+document.getElementById('takes').addEventListener('change',e=>{ const row=e.target.closest('.take'); if(!row) return; const t=takes[+row.dataset.i], a=e.target.dataset.act;
+  if(a==='mode') t.mode=e.target.value; if(a==='mute') t.muted=e.target.checked; if(a==='name') t.name=e.target.value.trim()||('Take '+t.n); saveTakes(); renderTakes(); });
+document.getElementById('takes').addEventListener('click',e=>{ if(e.target.dataset.act!=='del') return; const i=+e.target.closest('.take').dataset.i, t=takes[i];
+  if(!confirm(`Delete ${t.name}? This can't be undone.`)) return; if(t===recTake) recTake=null; takes.splice(i,1); saveTakes(); renderTakes(); });
+// per-take WAV stems (band excluded, exact length), zipped
+function crc32(b){ let c,crc=-1; for(let i=0;i<b.length;i++){ c=(crc^b[i])&255; for(let k=0;k<8;k++) c=c&1?(c>>>1)^0xEDB88320:c>>>1; crc=(crc>>>8)^c; } return (crc^-1)>>>0; }
+function zipStore(files){ const parts=[], cen=[]; let off=0; const enc=new TextEncoder();
+  const le=(n,w)=>{ const a=[]; for(let i=0;i<w;i++) a.push((n>>>(8*i))&255); return a; };
+  for(const f of files){ const nm=enc.encode(f.name), c=crc32(f.bytes), sz=f.bytes.length;
+    const h=new Uint8Array([0x50,0x4B,3,4,20,0,0,0,0,0,0,0,0x21,0,...le(c,4),...le(sz,4),...le(sz,4),...le(nm.length,2),0,0,...nm]);
+    parts.push(h,f.bytes); cen.push(new Uint8Array([0x50,0x4B,1,2,20,0,20,0,0,0,0,0,0,0,0x21,0,...le(c,4),...le(sz,4),...le(sz,4),...le(nm.length,2),0,0,0,0,0,0,0,0,0,0,0,0,...le(off,4),...nm]));
+    off+=h.length+sz; }
+  const cl=cen.reduce((a,x)=>a+x.length,0), end=new Uint8Array([0x50,0x4B,5,6,0,0,0,0,...le(files.length,2),...le(files.length,2),...le(cl,4),...le(off,4),0,0]);
+  const out=new Uint8Array(off+cl+end.length); let p=0; for(const x of [...parts,...cen,end]){ out.set(x,p); p+=x.length; } return out; }
+async function exportStemsBytes(o){ const list=takes.filter(t=>t.notes.length); if(!list.length) throw new Error('No takes to export');
+  const files=[]; for(const t of list){ const r=await renderLoop(Object.assign({},o,{onlyTake:t,stem:true,mutes:{drums:true,bass:true,piano:true,organ:true}}));
+    files.push({name:`${APP}-take${t.n}-${r.st.bpm}bpm-${keyLabel()}.wav`,bytes:wav24(r.ch,r.N),frames:r.N}); }
+  return {files, zip:zipStore(files), name:`${APP}-takes-${mergeOpts(o).bpm}bpm-${keyLabel()}.zip`}; }
+// computer keyboard: A W S E D F T G Y H U J K = C..C, Z/X octave
+const KEYMAP='awsedftgyhujk';
+function kbBase(){ return 12*(state.liveOct+1); }
+document.addEventListener('keydown',e=>{ if(e.repeat||e.metaKey||e.ctrlKey||e.altKey) return; const tg=e.target.tagName; if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA') return;
+  const k=e.key.toLowerCase(), i=KEYMAP.indexOf(k);
+  if(k==='z'||k==='x'){ state.liveOct=Math.max(1,Math.min(6,state.liveOct+(k==='z'?-1:1))); save(); renderKeys(); return; }
+  if(i>=0){ e.preventDefault(); liveOn(kbBase()+i,0.8,'kb'); } });
+document.addEventListener('keyup',e=>{ const i=KEYMAP.indexOf(e.key.toLowerCase()); if(i>=0) liveOff(kbBase()+i,'kb'); });
+window.addEventListener('blur',()=>{ for(const [k] of [...liveVoices]) if(k.startsWith('kb:')||k.startsWith('tap:')) liveOff(+k.split(':')[1],k.split(':')[0]); });
+// key/scale hint: chord tones of the chord under the playhead
+let hintBar=-1;
+function curBar(){ if(!playing||!ctx) return 0; const now=ctx.currentTime; let cur=null; for(const e of stepLog){ if(e.time<=now) cur=e; else break; } return cur?Math.floor(cur.step/16)%4:0; }
+function chordTones(i){ const c=prog[i], r=pc(c.root+transpose()); return c.ivs.map(iv=>pc(r+iv)); }
+function updateHint(force){ const b=curBar(); if(b===hintBar&&!force) return; hintBar=b; const tones=chordTones(b);
+  const scale=(prog[0].minor?[0,2,3,5,7,8,10]:[0,2,4,5,7,9,11]).map(x=>pc(x+state.keyRoot));
+  const el=document.getElementById('liveHint'); if(el) el.innerHTML=`Key <b>${NAMES[state.keyRoot]} ${prog[0].minor?'minor':'major'}</b> · now <b>${chordName(b)}</b>: chord tones <b>${tones.map(t=>NAMES[t]).join(' ')}</b>`;
+  document.querySelectorAll('.mk').forEach(k=>{ const p=pc(+k.dataset.n); k.classList.toggle('tone',tones.includes(p)); k.classList.toggle('root',p===tones[0]); k.classList.toggle('out',!scale.includes(p)); }); }
+function renderKeys(){ const box=document.getElementById('miniKeys'); if(!box) return; const base=kbBase();
+  box.innerHTML=[...Array(13)].map((_,i)=>{ const n=base+i, blk=[1,3,6,8,10].includes(i%12);
+    return `<button class="mk ${blk?'blk':'wht'}" data-n="${n}" aria-label="${NAMES[n%12]}${Math.floor(n/12)-1}"><span>${NAMES[n%12]}</span><i>${KEYMAP[i].toUpperCase()}</i></button>`; }).join('');
+  const ol=document.getElementById('liveOctLbl'); if(ol) ol.textContent='C'+state.liveOct; updateHint(true); }
+function keyVis(n,on){ const k=document.querySelector(`.mk[data-n="${n}"]`); if(k) k.classList.toggle('down',on); }
+(function(){ const box=document.getElementById('miniKeys'); if(!box) return; const down=new Map();
+  box.addEventListener('pointerdown',e=>{ const k=e.target.closest('.mk'); if(!k) return; e.preventDefault(); try{ if(k.hasPointerCapture&&k.hasPointerCapture(e.pointerId)) k.releasePointerCapture(e.pointerId); }catch(_){}
+    const n=+k.dataset.n; down.set(e.pointerId,n); liveOn(n,0.8,'tap'); });
+  const up=e=>{ if(!down.has(e.pointerId)) return; liveOff(down.get(e.pointerId),'tap'); down.delete(e.pointerId); };
+  box.addEventListener('pointerup',up); box.addEventListener('pointercancel',up); box.addEventListener('pointerleave',up);
+  box.addEventListener('pointerover',e=>{ if(!down.has(e.pointerId)||e.buttons===0) return; const k=e.target.closest('.mk'); if(!k) return; const n=+k.dataset.n;
+    if(n!==down.get(e.pointerId)){ liveOff(down.get(e.pointerId),'tap'); down.set(e.pointerId,n); liveOn(n,0.8,'tap'); } });
+  box.addEventListener('contextmenu',e=>e.preventDefault()); })();
+window.__live={liveOn,liveOff,setSustain,takes,exportStemsBytes,tpos:()=>ctx&&transportPos(ctx.currentTime),voices:liveVoices,get sustain(){return sustain;}};
+function refreshMidi(){ if(!midiAccess) return;
+  const fill=(sel,ports,cur)=>{ sel.innerHTML='<option value="">(none)</option>'+[...ports.values()].map(p=>`<option value="${p.id}">${p.name}</option>`).join(''); sel.value=[...ports.keys()].includes(cur)?cur:''; };
+  fill(ui.midiIn,midiAccess.inputs,state.midiIn); fill(ui.midiOut,midiAccess.outputs,state.midiOut);
+  if(midiInPort) midiInPort.onmidimessage=null; midiInPort=midiAccess.inputs.get(ui.midiIn.value)||null; if(midiInPort) midiInPort.onmidimessage=onMidiMsg;
+  midiOut=midiAccess.outputs.get(ui.midiOut.value)||null; }
+
+// ---------- UI ----------
+const ui={}; ['bassStyle','tap','tapBtn','bpm','key','chords','chordErr','recipe','preset','bars','parts','play','exportWav','exportMid','status','grid','midiIn','midiInMode','midiOut','midiNote','midiTransport','liveInst','liveOctDn','liveOctUp','liveGainIn','liveRec','liveQuant','liveClear','licState','licKey','licBtn','licOff','buy'].forEach(id=>ui[id]=document.getElementById(id));
+function setStatus(s){ ui.status.textContent=s; }
+ui.key.innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+ui.bpm.value=state.bpm; ui.key.value=state.keyRoot; ui.chords.value=state.chords; ui.recipe.value=state.recipe; ui.bassStyle.value=state.bassStyle; ui.bars.value=state.bars; ui.midiInMode.value=state.midiInMode; ui.midiTransport.checked=state.midiTransport; ui.liveInst.value=state.liveInst; ui.liveGainIn.value=state.liveGain; ui.liveRec.checked=state.liveRec; ui.liveQuant.checked=state.liveQuant;
+ui.parts.innerHTML=PARTS.map(p=>`<div class="part" id="part-${p.id}"><label><span><input type="checkbox" data-mute="${p.id}"> Mute</span>${p.label}</label><input type="range" min="0" max="1" step="0.01" data-gain="${p.id}" value="${state.gains[p.id]}"></div>`).join('');
+function renderGrid(){ ui.grid.innerHTML=[0,1,2,3].map(i=>`<div class="bar"><div class="ph"></div><small>Bar ${i+1}</small><br><b>${chordName(i)}</b></div>`).join('');
+  updateHint(true); PARTS.forEach(p=>{ document.querySelector(`[data-mute="${p.id}"]`).checked=state.mutes[p.id]; document.getElementById('part-'+p.id).classList.toggle('muted',state.mutes[p.id]); }); }
+function onChords(){ const p=parseProg(ui.chords.value); if(!p){ ui.chordErr.textContent='Enter exactly 4 chords, e.g. C G Am F (m, 7, m7, maj7, dim, sus2, sus4)'; return; }
+  ui.chordErr.textContent=''; const t=transpose(); prog=p; state.chords=ui.chords.value.trim(); state.keyRoot=pc(p[0].root+t); ui.key.value=state.keyRoot; save(); renderGrid(); }
+ui.bpm.addEventListener('change',()=>{ const v=Math.round(+ui.bpm.value); if(!(v>=60&&v<=180)){ ui.bpm.value=state.bpm; setStatus('BPM must be 60–180'); return; } state.bpm=v; save(); });
+ui.key.addEventListener('change',()=>{ state.keyRoot=+ui.key.value; save(); renderGrid(); });
+ui.chords.addEventListener('change',onChords);
+ui.recipe.addEventListener('change',()=>{ state.recipe=ui.recipe.value; save(); });
+ui.bassStyle.addEventListener('change',()=>{ state.bassStyle=ui.bassStyle.value; save(); });
+ui.bars.addEventListener('change',()=>{ state.bars=+ui.bars.value; save(); });
+ui.preset.addEventListener('change',()=>{ if(ui.preset.value){ ui.chords.value=ui.preset.value; state.keyRoot=parseProg(ui.preset.value)[0].root; ui.key.value=state.keyRoot; prog=parseProg(ui.preset.value); onChords(); } });
+ui.midiInMode.addEventListener('change',()=>{ state.midiInMode=ui.midiInMode.value; held.clear(); chordNotes=null; liveAllOff(); save(); });
+ui.midiTransport.addEventListener('change',()=>{ state.midiTransport=ui.midiTransport.checked; save(); });
+ui.liveInst.addEventListener('change',()=>{ liveAllOff(); state.liveInst=ui.liveInst.value; save(); });
+ui.liveGainIn.addEventListener('input',()=>{ state.liveGain=+ui.liveGainIn.value; if(liveGainNode) liveGainNode.gain.setTargetAtTime(state.liveGain,ctx.currentTime,0.01); save(); });
+ui.liveOctDn.addEventListener('click',()=>{ state.liveOct=Math.max(1,state.liveOct-1); save(); renderKeys(); });
+ui.liveOctUp.addEventListener('click',()=>{ state.liveOct=Math.min(6,state.liveOct+1); save(); renderKeys(); });
+ui.liveRec.addEventListener('change',()=>{ state.liveRec=ui.liveRec.checked; save(); });
+ui.liveQuant.addEventListener('change',()=>{ state.liveQuant=ui.liveQuant.checked; save(); });
+ui.liveClear.addEventListener('click',()=>{ if(!takes.length||!confirm(`Clear all ${takes.length} takes? This can't be undone.`)) return; takes.length=0; recTake=null; liveOpen.clear(); saveTakes(); renderTakes(); });
+document.getElementById('exportStems').addEventListener('click',async()=>{ if(!lic.valid&&state.bars>4){ setStatus('Demo: 4-bar exports. Unlock below for 8/16-bar take stems.'); return; }
+  setStatus('Rendering take stems…'); try{ const r=await exportStemsBytes(); download(r.zip,r.name,'application/zip'); setStatus(`Saved ${r.name} (${r.files.length} take WAVs)`); }catch(e){ setStatus('Stems export failed: '+e.message); } });
+ui.midiIn.addEventListener('change',()=>{ state.midiIn=ui.midiIn.value; save(); refreshMidi(); });
+ui.midiOut.addEventListener('change',()=>{ state.midiOut=ui.midiOut.value; save(); refreshMidi(); });
+ui.parts.addEventListener('input',e=>{ const m=e.target.dataset.mute, g=e.target.dataset.gain;
+  if(m){ state.mutes[m]=e.target.checked; renderGrid(); }
+  if(g){ state.gains[g]=+e.target.value; if(bus) bus.chairs[g].gain.setTargetAtTime(state.gains[g],ctx.currentTime,0.01); }
+  save(); });
+async function togglePlay(){ await ensureCtx(); playing?stop():start(); }
+ui.play.addEventListener('click',togglePlay);
+ui.tapBtn.addEventListener('click',async()=>{ ui.tapBtn.textContent='Starting…'; await ensureCtx(); if(ctx.state==='running') ui.tap.classList.add('hide'); showLoad(); });
+ui.exportWav.addEventListener('click',async()=>{ if(!lic.valid&&state.bars>4){ setStatus('Demo: 4-bar WAV export. Unlock below for 8/16 bars.'); return; }
+  setStatus('Rendering…'); try{ const r=await exportWavBytes(); download(r.bytes,r.name,'audio/wav'); setStatus('Saved '+r.name); }catch(e){ setStatus('Export failed: '+e.message); } });
+ui.exportMid.addEventListener('click',()=>{ const r=exportMidBytes(); download(r.bytes,r.name,'audio/midi'); setStatus('Saved '+r.name); });
+ui.licBtn.addEventListener('click',async()=>{ const k=ui.licKey.value.trim(); if(!k) return; ui.licState.textContent='Checking…';
+  try{ const r=await activateKey(k); if(r.ok){ Object.assign(lic,{valid:true,key:k,instance:r.instance,checked:Date.now()}); saveLic(); licUI(); ui.licKey.value=''; } else ui.licState.textContent=r.reason; }
+  catch(e){ ui.licState.textContent='Could not reach Lemon Squeezy. Check your connection and try again.'; } });
+ui.licOff.addEventListener('click',async()=>{ if(lic.key&&lic.instance&&configured()) await lsCall('deactivate',{license_key:lic.key,instance_id:lic.instance}).catch(()=>{});
+  for(const k of Object.keys(lic)) delete lic[k]; lic.valid=false; saveLic(); licUI(); });
+if(LEMON.checkoutUrl){ ui.buy.href=LEMON.checkoutUrl; ui.buy.textContent='Buy PorchBand · '+LEMON.price; }
+else { ui.buy.removeAttribute('href'); ui.buy.setAttribute('aria-disabled','true'); ui.buy.textContent='Checkout opening soon · '+LEMON.price; }
+// re-check on load: a refunded/disabled key relocks; offline keeps the last good state
+if(lic.valid&&lic.key) validateKey(lic.key,lic.instance).then(v=>{ lic.valid=v; lic.checked=Date.now(); if(!v) delete lic.instance; saveLic(); licUI(); }).catch(()=>{});
+if(navigator.requestMIDIAccess) navigator.requestMIDIAccess().then(a=>{ midiAccess=a; a.onstatechange=refreshMidi; refreshMidi(); }).catch(()=>{ ui.midiNote.textContent='Web MIDI unavailable or blocked in this browser.'; });
+else ui.midiNote.textContent='Web MIDI not supported in this browser (try Chrome/Edge).';
+renderKeys(); renderGrid(); licUI(); showLoad(); recUI();
